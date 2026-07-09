@@ -1,0 +1,37 @@
+# Private source data and generated archive state
+/sources/
+/state/
+/objects/
+/views/
+/annotations/
+/exports/
+
+# Local config and secrets
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+
+# OS/editor noise
+.DS_Store
+.Spotlight-V100/
+.TemporaryItems/
+.Trashes/
+.vscode/
+.idea/
+
+# Node/package-manager outputs, if this becomes a JS/TS project
+node_modules/
+dist/
+coverage/
+.next/
+.turbo/
+.pnpm-store/
+
+# Logs and scratch
+*.log
+tmp/
+.tmp/
