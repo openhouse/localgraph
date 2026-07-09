@@ -52,7 +52,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             db_path = root / "state" / "localgraph.sqlite"
 
-            with sqlite3.connect(db_path) as db:
+            with contextlib.closing(sqlite3.connect(db_path)) as db:
                 db.execute(
                     "INSERT INTO identities (stable_key, display_name, kind) VALUES (?, ?, ?)",
                     ("ig:alice", "Alice Example", "person"),
@@ -65,6 +65,7 @@ class CliTests(unittest.TestCase):
                     "INSERT INTO threads (source_kind, source_thread_key, title, thread_kind) VALUES (?, ?, ?, ?)",
                     ("instagram", "messages/inbox/alice_123", "Alice Example", "direct"),
                 )
+                db.commit()
 
             code, _ = run_cli(["--root", str(root), "render"])
             self.assertEqual(code, 0)

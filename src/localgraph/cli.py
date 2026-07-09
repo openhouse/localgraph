@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+from .automation import configure_google_drive_source, install_daily_import, run_daily_import
 from .ingest import import_workspace_sources
 from .instagram import scan_instagram_source
 from .paths import Workspace
@@ -56,6 +57,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest.add_argument("--render", action="store_true", help="Render filesystem views after import.")
 
+    configure_drive = commands.add_parser("configure-drive", help="Record the local Google Drive Instagram export folder.")
+    configure_drive.add_argument("--instagram-drive-source", required=True, help="Local Google Drive folder containing Meta exports.")
+
+    daily_import = commands.add_parser("daily-import", help="Import the daily Instagram export from Google Drive.")
+    daily_import.add_argument("--instagram-drive-source", help="Local Google Drive Instagram folder. Overrides config/discovery.")
+    daily_import.add_argument("--imessage-db", help="Optional iMessage chat.db path. Defaults to sources/imessage/chat.db.")
+    daily_import.add_argument("--skip-instagram", action="store_true", help="Do not import Instagram messages.")
+    daily_import.add_argument("--skip-imessage", action="store_true", help="Do not import iMessage messages.")
+    daily_import.add_argument("--no-render", action="store_true", help="Do not render views after import.")
+    daily_import.add_argument("--write-config", action="store_true", help="Persist an explicit or discovered Google Drive source.")
+    daily_import.add_argument("--all-instagram-exports", action="store_true", help="Import every export under the Drive source instead of only the newest export.")
+    daily_import.add_argument("--me", default="Me", help="Display name for your own identity. Defaults to 'Me'.")
+    daily_import.add_argument("--me-instagram", action="append", default=[], help="Instagram self name. May be repeated.")
+    daily_import.add_argument("--me-imessage", action="append", default=[], help="iMessage self handle. May be repeated.")
+
+    install_daily = commands.add_parser("install-daily-import", help="Install a macOS LaunchAgent for daily imports.")
+    install_daily.add_argument("--instagram-drive-source", help="Local Google Drive Instagram folder to pin in the daily job.")
+    install_daily.add_argument("--skip-imessage", action="store_true", help="Do not import iMessage from the daily job.")
+    install_daily.add_argument("--me", default="Me", help="Display name for your own identity. Defaults to 'Me'.")
+    install_daily.add_argument("--me-instagram", action="append", default=[], help="Instagram self name. May be repeated.")
+    install_daily.add_argument("--me-imessage", action="append", default=[], help="iMessage self handle. May be repeated.")
+    install_daily.add_argument("--hour", type=int, default=3, help="LaunchAgent hour, 0-23. Defaults to 3.")
+    install_daily.add_argument("--minute", type=int, default=15, help="LaunchAgent minute, 0-59. Defaults to 15.")
+    install_daily.add_argument("--label", default="com.openhouse.localgraph.daily-import", help="LaunchAgent label.")
+    install_daily.add_argument("--dry-run", action="store_true", help="Print planned paths without writing files.")
+
     render = commands.add_parser("render", help="Render filesystem views from canonical SQLite state.")
     render.add_argument("--source", help="Optionally scan an Instagram source directory and include it in the render manifest.")
 
@@ -92,6 +119,35 @@ def main(argv: list[str] | None = None) -> int:
                 me_instagram=args.me_instagram,
                 me_imessage=args.me_imessage,
                 render=args.render,
+            )
+        elif args.command == "configure-drive":
+            summary = command_configure_drive(workspace, instagram_drive_source=args.instagram_drive_source)
+        elif args.command == "daily-import":
+            summary = command_daily_import(
+                workspace,
+                instagram_drive_source=args.instagram_drive_source,
+                imessage_db=args.imessage_db,
+                skip_instagram=args.skip_instagram,
+                skip_imessage=args.skip_imessage,
+                render=not args.no_render,
+                write_config=args.write_config,
+                latest_instagram_only=not args.all_instagram_exports,
+                me=args.me,
+                me_instagram=args.me_instagram,
+                me_imessage=args.me_imessage,
+            )
+        elif args.command == "install-daily-import":
+            summary = command_install_daily_import(
+                workspace,
+                instagram_drive_source=args.instagram_drive_source,
+                skip_imessage=args.skip_imessage,
+                me=args.me,
+                me_instagram=args.me_instagram,
+                me_imessage=args.me_imessage,
+                hour=args.hour,
+                minute=args.minute,
+                label=args.label,
+                dry_run=args.dry_run,
             )
         elif args.command == "render":
             summary = command_render(workspace, source=args.source)
@@ -177,6 +233,66 @@ def command_import(
         if render:
             result["render"] = render_views(db, workspace, source_scan=scan_instagram_source(instagram_path))
     return result
+
+
+def command_configure_drive(workspace: Workspace, *, instagram_drive_source: str) -> dict[str, object]:
+    return configure_google_drive_source(workspace, _resolve_workspace_path(workspace, instagram_drive_source))
+
+
+def command_daily_import(
+    workspace: Workspace,
+    *,
+    instagram_drive_source: str | None,
+    imessage_db: str | None,
+    skip_instagram: bool,
+    skip_imessage: bool,
+    render: bool,
+    write_config: bool,
+    latest_instagram_only: bool,
+    me: str,
+    me_instagram: list[str],
+    me_imessage: list[str],
+) -> dict[str, object]:
+    return run_daily_import(
+        workspace,
+        instagram_drive_source=_resolve_workspace_path(workspace, instagram_drive_source) if instagram_drive_source else None,
+        imessage_db=_resolve_workspace_path(workspace, imessage_db) if imessage_db else None,
+        me_name=me,
+        me_instagram_names=me_instagram,
+        me_imessage_handles=me_imessage,
+        skip_instagram=skip_instagram,
+        skip_imessage=skip_imessage,
+        render=render,
+        write_config_on_discovery=write_config,
+        latest_instagram_only=latest_instagram_only,
+    )
+
+
+def command_install_daily_import(
+    workspace: Workspace,
+    *,
+    instagram_drive_source: str | None,
+    skip_imessage: bool,
+    me: str,
+    me_instagram: list[str],
+    me_imessage: list[str],
+    hour: int,
+    minute: int,
+    label: str,
+    dry_run: bool,
+) -> dict[str, object]:
+    return install_daily_import(
+        workspace,
+        instagram_drive_source=_resolve_workspace_path(workspace, instagram_drive_source) if instagram_drive_source else None,
+        skip_imessage=skip_imessage,
+        me_name=me,
+        me_instagram_names=me_instagram,
+        me_imessage_handles=me_imessage,
+        hour=hour,
+        minute=minute,
+        label=label,
+        dry_run=dry_run,
+    )
 
 
 def command_render(workspace: Workspace, *, source: str | None = None) -> dict[str, object]:

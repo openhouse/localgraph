@@ -140,6 +140,7 @@ class Workspace:
             "imports": {
                 "instagram": {
                     "localPath": "sources/instagram",
+                    "googleDriveLocalPath": None,
                     "googleDriveFolderId": None,
                 },
                 "imessage": {

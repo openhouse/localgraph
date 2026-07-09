@@ -128,7 +128,7 @@ class IngestTests(unittest.TestCase):
 
 def create_imessage_fixture(path: Path) -> None:
     apple_date = 700_000_000_000_000_000
-    with sqlite3.connect(path) as db:
+    with contextlib.closing(sqlite3.connect(path)) as db:
         db.executescript(
             """
             CREATE TABLE handle (
@@ -210,6 +210,7 @@ def create_imessage_fixture(path: Path) -> None:
             (1, "att-1", "/tmp/photo.jpg", "image/jpeg", "public.jpeg", 10),
         )
         db.execute("INSERT INTO message_attachment_join (message_id, attachment_id) VALUES (?, ?)", (3, 1))
+        db.commit()
 
 
 def run_cli(argv: list[str]) -> tuple[int, str]:

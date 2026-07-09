@@ -49,6 +49,7 @@ python -m localgraph --root ~/Localgraph init
 python -m localgraph --root ~/Localgraph doctor
 python -m localgraph --root ~/Localgraph scan
 python -m localgraph --root ~/Localgraph import --me "Jamie Burkart" --render
+python -m localgraph --root ~/Localgraph daily-import --me "Jamie Burkart"
 python -m localgraph --root ~/Localgraph render
 python -m localgraph --root ~/Localgraph view-name person "Alice Example" "instagram:alice"
 ```
@@ -58,8 +59,10 @@ python -m localgraph --root ~/Localgraph view-name person "Alice Example" "insta
 returning message bodies. `import` reads Instagram JSON message exports and an
 iMessage `chat.db`, normalizes people, accounts, groups, threads, messages, and
 media references into SQLite, and can immediately `--render` filesystem views.
-`render` builds deterministic filesystem views from canonical SQLite state and
-writes `_system/source-manifest.json`.
+`daily-import` reads the configured Google Drive Instagram export folder,
+selects the newest synced transfer by default, appends a JSONL run log, and
+renders views. `render` builds deterministic filesystem views from canonical
+SQLite state and writes `_system/source-manifest.json`.
 
 Default private import locations:
 
@@ -83,6 +86,50 @@ python -m localgraph --root ~/Localgraph import \
 On macOS, `~/Library/Messages/chat.db` is usually protected by Full Disk Access.
 The simplest repeatable workflow is to copy `chat.db` plus its `chat.db-wal` and
 `chat.db-shm` siblings into `sources/imessage/`, then run the import there.
+
+## Daily Google Drive Import
+
+If Meta is transferring Instagram data into Google Drive each day, pin the local
+Drive Desktop folder once:
+
+```bash
+python -m localgraph --root ~/Localgraph configure-drive \
+  --instagram-drive-source "/Users/jamie/Library/CloudStorage/GoogleDrive-example/My Drive/Instagram"
+```
+
+Then run the daily importer manually or from automation:
+
+```bash
+python -m localgraph --root ~/Localgraph daily-import \
+  --me "Jamie Burkart" \
+  --me-instagram "jamieburkart" \
+  --write-config
+```
+
+The importer deliberately checks explicit and configured Drive paths before it
+tries shallow discovery under Drive Desktop roots such as `Shared drives/Instagram`
+or `My Drive/Instagram`. Scheduled runs import only the newest export folder by
+default, so the job does not repeatedly recurse through a large Drive archive.
+Pass `--all-instagram-exports` when you intentionally want an archive-wide
+rescan. If Drive Desktop has not materialized an export locally yet, the run is
+recorded as `pending` instead of blocking on a provider-backed folder read; mark
+the export folder available offline if you want the local scheduler to import it
+immediately after the transfer finishes.
+
+On macOS, install a user LaunchAgent for the daily import:
+
+```bash
+python -m localgraph --root ~/Localgraph install-daily-import \
+  --instagram-drive-source "/Users/jamie/Library/CloudStorage/GoogleDrive-example/My Drive/Instagram" \
+  --me "Jamie Burkart" \
+  --me-instagram "jamieburkart" \
+  --hour 3 \
+  --minute 15
+```
+
+The installer writes the job script under `state/bin/` and the LaunchAgent plist
+under `~/Library/LaunchAgents/`. Each run appends a private audit record to
+`state/daily-import-runs.jsonl` and scheduler output to `state/daily-import.*.log`.
 
 Generated view paths pair readable labels with a short hash suffix derived from
 a source key:

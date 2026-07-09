@@ -57,9 +57,13 @@ Both importers normalize into the same canonical tables:
   attachments.
 - `graph_edges` for derived thread, group, and participant relationships.
 
-The importers are intentionally local-first. Future Google Drive discovery can
-still materialize Meta exports under `sources/instagram`, but message parsing
-belongs to the same local importer path.
+The importers are intentionally local-first. Google Drive automation treats
+Drive Desktop as another local source path: `daily-import` resolves an explicit,
+configured, or shallow-discovered Instagram transfer folder, narrows scheduled
+runs to the newest detected export by default, runs the same canonical importer,
+writes a private run log, and regenerates views. Message parsing stays in the
+importer layer no matter whether the source is `sources/instagram` or a synced
+Drive folder.
 
 ## Filesystem View Contract
 
