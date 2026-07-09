@@ -31,3 +31,16 @@ localgraph/
 
 The public repository contains code and design notes only. Personal messages,
 media, exports, indexes, and annotations belong on local disk.
+
+## Scaffold CLI
+
+The first scaffold uses only the Python standard library.
+
+```bash
+python -m localgraph --root ~/Localgraph init
+python -m localgraph --root ~/Localgraph doctor
+python -m localgraph --root ~/Localgraph render
+```
+
+`init` creates the private local workspace directories and a SQLite database.
+`render` builds deterministic filesystem views from canonical SQLite state.

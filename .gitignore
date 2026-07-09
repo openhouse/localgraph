@@ -5,6 +5,7 @@
 /views/
 /annotations/
 /exports/
+PRIVATE-DATA-README.md
 
 # Local config and secrets
 .env
@@ -30,6 +31,12 @@ coverage/
 .next/
 .turbo/
 .pnpm-store/
+
+# Python outputs
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
 
 # Logs and scratch
 *.log
