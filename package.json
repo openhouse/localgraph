@@ -1,0 +1,19 @@
+{
+  "name": "localgraph",
+  "version": "0.0.0",
+  "description": "Local-first correspondence graph for private source texts and filesystem-native views.",
+  "type": "module",
+  "bin": {
+    "localgraph": "src/cli.js"
+  },
+  "scripts": {
+    "doctor": "node src/cli.js doctor",
+    "init:local": "node src/cli.js init",
+    "scan": "node src/cli.js scan",
+    "render": "node src/cli.js render",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -31,3 +31,21 @@ localgraph/
 
 The public repository contains code and design notes only. Personal messages,
 media, exports, indexes, and annotations belong on local disk.
+
+## Scaffold B CLI
+
+This branch includes a dependency-free Node.js CLI. It uses only Node built-ins
+and the built-in test runner.
+
+```bash
+npm test
+node src/cli.js init
+node src/cli.js doctor
+node src/cli.js scan --json
+node src/cli.js render --json
+```
+
+`init` creates private local directories and `localgraph.config.json`. Those
+paths are ignored by git. `scan` detects Instagram transfer exports from
+`sources/instagram` without reading message bodies. `render` writes a
+symlink-friendly `views/` skeleton and `_system/source-manifest.json`.
