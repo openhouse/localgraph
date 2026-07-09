@@ -52,7 +52,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             db_path = root / "state" / "localgraph.sqlite"
 
-            with sqlite3.connect(db_path) as db:
+            with contextlib.closing(sqlite3.connect(db_path)) as db:
                 db.execute(
                     "INSERT INTO identities (stable_key, display_name, kind) VALUES (?, ?, ?)",
                     ("ig:alice", "Alice Example", "person"),
@@ -65,6 +65,7 @@ class CliTests(unittest.TestCase):
                     "INSERT INTO threads (source_kind, source_thread_key, title, thread_kind) VALUES (?, ?, ?, ?)",
                     ("instagram", "messages/inbox/alice_123", "Alice Example", "direct"),
                 )
+                db.commit()
 
             code, _ = run_cli(["--root", str(root), "render"])
             self.assertEqual(code, 0)
@@ -144,21 +145,21 @@ class CliTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            code, stdout = run_cli(["--root", str(root), "import", "instagram"])
+            code, stdout = run_cli(["--root", str(root), "import", "--skip-imessage", "--render"])
             self.assertEqual(code, 0)
             payload = json.loads(stdout)
-            self.assertEqual(payload["messages"], 3)
-            self.assertEqual(payload["groups"], 1)
+            self.assertEqual(payload["totals"]["messages"], 3)
+            self.assertEqual(payload["totals"]["groups"], 1)
 
             code, _ = run_cli(["--root", str(root), "render"])
             self.assertEqual(code, 0)
             manifest = json.loads((root / "views" / "_system" / "source-manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["counts"]["messages"], 3)
-            transcripts = list((root / "views" / "threads" / "instagram").glob("*/transcript.md"))
+            transcripts = list((root / "views" / "threads" / "instagram").glob("*/messages.md"))
             self.assertTrue(any("Hello from Instagram" in path.read_text(encoding="utf-8") for path in transcripts))
             self.assertTrue(any("Group note" in path.read_text(encoding="utf-8") for path in transcripts))
 
-            with sqlite3.connect(root / "state" / "localgraph.sqlite") as db:
+            with contextlib.closing(sqlite3.connect(root / "state" / "localgraph.sqlite")) as db:
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM identities WHERE kind = 'person'").fetchone()[0], 3)
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM identities WHERE kind = 'group'").fetchone()[0], 1)
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM media_objects").fetchone()[0], 1)
@@ -171,21 +172,21 @@ class CliTests(unittest.TestCase):
 
             code, _ = run_cli(["--root", str(root), "init"])
             self.assertEqual(code, 0)
-            code, stdout = run_cli(["--root", str(root), "import", "imessage", "--chat-db", str(chat_db)])
+            code, stdout = run_cli(["--root", str(root), "import", "--skip-instagram", "--imessage-db", str(chat_db), "--render"])
             self.assertEqual(code, 0)
             payload = json.loads(stdout)
-            self.assertEqual(payload["messages"], 2)
-            self.assertEqual(payload["groups"], 1)
+            self.assertEqual(payload["totals"]["messages"], 2)
+            self.assertEqual(payload["totals"]["groups"], 1)
 
             code, _ = run_cli(["--root", str(root), "render"])
             self.assertEqual(code, 0)
-            transcripts = list((root / "views" / "threads" / "imessage").glob("*/transcript.md"))
+            transcripts = list((root / "views" / "threads" / "imessage").glob("*/messages.md"))
             self.assertEqual(len(transcripts), 1)
             rendered = transcripts[0].read_text(encoding="utf-8")
             self.assertIn("Hello from Messages", rendered)
             self.assertIn("Reply from Messages", rendered)
 
-            with sqlite3.connect(root / "state" / "localgraph.sqlite") as db:
+            with contextlib.closing(sqlite3.connect(root / "state" / "localgraph.sqlite")) as db:
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM identities WHERE kind = 'person'").fetchone()[0], 3)
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM identities WHERE kind = 'group'").fetchone()[0], 1)
 
@@ -201,7 +202,7 @@ def build_imessage_fixture(path: Path) -> None:
     apple_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
     first = int((datetime(2026, 1, 1, tzinfo=timezone.utc) - apple_epoch).total_seconds() * 1_000_000_000)
     second = first + 1_000_000_000
-    with sqlite3.connect(path) as db:
+    with contextlib.closing(sqlite3.connect(path)) as db:
         db.executescript(
             """
             CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT, service TEXT);
@@ -238,6 +239,7 @@ def build_imessage_fixture(path: Path) -> None:
         )
         db.execute("INSERT INTO chat_message_join (chat_id, message_id) VALUES (1, 1)")
         db.execute("INSERT INTO chat_message_join (chat_id, message_id) VALUES (1, 2)")
+        db.commit()
 
 
 if __name__ == "__main__":

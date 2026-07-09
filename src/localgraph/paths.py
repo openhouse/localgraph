@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 PRIVATE_DIRECTORY_NAMES = ("sources", "state", "objects", "views", "annotations", "exports")
@@ -67,6 +67,10 @@ class Workspace:
     @property
     def imessage_source_dir(self) -> Path:
         return self.sources_dir / "imessage"
+
+    @property
+    def imessage_chat_db_path(self) -> Path:
+        return self.imessage_source_dir / "chat.db"
 
     def plan(self) -> dict[str, object]:
         return {
@@ -138,10 +142,12 @@ class Workspace:
             "imports": {
                 "instagram": {
                     "localPath": "sources/instagram",
+                    "googleDriveLocalPath": None,
                     "googleDriveFolderId": None,
                 },
                 "imessage": {
-                    "chatDbPath": "~/Library/Messages/chat.db",
+                    "localPath": "sources/imessage/chat.db",
+                    "defaultMacPath": "~/Library/Messages/chat.db",
                 },
             },
         }

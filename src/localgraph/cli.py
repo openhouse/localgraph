@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 import sys
 from pathlib import Path
 
-from .imessage import import_imessage_chat_db
+from .automation import configure_google_drive_source, install_daily_import, run_daily_import
+from .ingest import import_workspace_sources
 from .instagram import scan_instagram_source
-from .instagram import import_instagram_source
 from .paths import Workspace
 from .render import render_views
 from .schema import connect, initialize_schema
@@ -38,25 +37,54 @@ def build_parser() -> argparse.ArgumentParser:
     scan = commands.add_parser("scan", help="Detect Instagram transfer exports without reading message bodies.")
     scan.add_argument("--source", help="Instagram source directory. Defaults to sources/instagram.")
 
+    ingest = commands.add_parser("import", help="Import Instagram and iMessage messages into canonical SQLite state.")
+    ingest.add_argument("--instagram-source", help="Instagram source directory. Defaults to sources/instagram.")
+    ingest.add_argument("--imessage-db", help="iMessage chat.db path. Defaults to sources/imessage/chat.db.")
+    ingest.add_argument("--skip-instagram", action="store_true", help="Do not import Instagram messages.")
+    ingest.add_argument("--skip-imessage", action="store_true", help="Do not import iMessage messages.")
+    ingest.add_argument("--me", default="Me", help="Display name for your own identity. Defaults to 'Me'.")
+    ingest.add_argument(
+        "--me-instagram",
+        action="append",
+        default=[],
+        help="Instagram participant name that should map to the self identity. May be repeated.",
+    )
+    ingest.add_argument(
+        "--me-imessage",
+        action="append",
+        default=[],
+        help="iMessage handle, phone, or email that should map to the self identity. May be repeated.",
+    )
+    ingest.add_argument("--render", action="store_true", help="Render filesystem views after import.")
+
+    configure_drive = commands.add_parser("configure-drive", help="Record the local Google Drive Instagram export folder.")
+    configure_drive.add_argument("--instagram-drive-source", required=True, help="Local Google Drive folder containing Meta exports.")
+
+    daily_import = commands.add_parser("daily-import", help="Import the daily Instagram export from Google Drive.")
+    daily_import.add_argument("--instagram-drive-source", help="Local Google Drive Instagram folder. Overrides config/discovery.")
+    daily_import.add_argument("--imessage-db", help="Optional iMessage chat.db path. Defaults to sources/imessage/chat.db.")
+    daily_import.add_argument("--skip-instagram", action="store_true", help="Do not import Instagram messages.")
+    daily_import.add_argument("--skip-imessage", action="store_true", help="Do not import iMessage messages.")
+    daily_import.add_argument("--no-render", action="store_true", help="Do not render views after import.")
+    daily_import.add_argument("--write-config", action="store_true", help="Persist an explicit or discovered Google Drive source.")
+    daily_import.add_argument("--all-instagram-exports", action="store_true", help="Import every export under the Drive source instead of only the newest export.")
+    daily_import.add_argument("--me", default="Me", help="Display name for your own identity. Defaults to 'Me'.")
+    daily_import.add_argument("--me-instagram", action="append", default=[], help="Instagram self name. May be repeated.")
+    daily_import.add_argument("--me-imessage", action="append", default=[], help="iMessage self handle. May be repeated.")
+
+    install_daily = commands.add_parser("install-daily-import", help="Install a macOS LaunchAgent for daily imports.")
+    install_daily.add_argument("--instagram-drive-source", help="Local Google Drive Instagram folder to pin in the daily job.")
+    install_daily.add_argument("--skip-imessage", action="store_true", help="Do not import iMessage from the daily job.")
+    install_daily.add_argument("--me", default="Me", help="Display name for your own identity. Defaults to 'Me'.")
+    install_daily.add_argument("--me-instagram", action="append", default=[], help="Instagram self name. May be repeated.")
+    install_daily.add_argument("--me-imessage", action="append", default=[], help="iMessage self handle. May be repeated.")
+    install_daily.add_argument("--hour", type=int, default=3, help="LaunchAgent hour, 0-23. Defaults to 3.")
+    install_daily.add_argument("--minute", type=int, default=15, help="LaunchAgent minute, 0-59. Defaults to 15.")
+    install_daily.add_argument("--label", default="com.openhouse.localgraph.daily-import", help="LaunchAgent label.")
+    install_daily.add_argument("--dry-run", action="store_true", help="Print planned paths without writing files.")
+
     render = commands.add_parser("render", help="Render filesystem views from canonical SQLite state.")
     render.add_argument("--source", help="Optionally scan an Instagram source directory and include it in the render manifest.")
-
-    import_cmd = commands.add_parser("import", help="Import private source messages into canonical SQLite state.")
-    import_sources = import_cmd.add_subparsers(dest="source_kind", required=True)
-
-    import_instagram = import_sources.add_parser("instagram", help="Import Instagram transfer message JSON.")
-    import_instagram.add_argument("--source", help="Instagram source directory. Defaults to sources/instagram.")
-
-    import_imessage = import_sources.add_parser("imessage", help="Import macOS Messages chat.db.")
-    import_imessage.add_argument("--chat-db", help="Path to a readable iMessage chat.db. Defaults to ~/Library/Messages/chat.db.")
-    import_imessage.add_argument("--limit", type=int, help="Import only the newest N iMessage rows from chat.db.")
-    import_imessage.add_argument("--immutable", action="store_true", help="Open a copied chat.db as immutable read-only input.")
-
-    import_all = import_sources.add_parser("all", help="Import Instagram and iMessage sources.")
-    import_all.add_argument("--instagram-source", help="Instagram source directory. Defaults to sources/instagram.")
-    import_all.add_argument("--imessage-chat-db", help="Path to a readable iMessage chat.db. Defaults to ~/Library/Messages/chat.db.")
-    import_all.add_argument("--imessage-limit", type=int, help="Import only the newest N iMessage rows from chat.db.")
-    import_all.add_argument("--imessage-immutable", action="store_true", help="Open a copied iMessage chat.db as immutable read-only input.")
 
     view_name = commands.add_parser("view-name", help="Print a deterministic symlink-friendly view path.")
     view_name.add_argument("kind", choices=view_kinds())
@@ -80,15 +108,54 @@ def main(argv: list[str] | None = None) -> int:
             summary = command_doctor(workspace)
         elif args.command == "scan":
             summary = command_scan(workspace, source=args.source)
+        elif args.command == "import":
+            summary = command_import(
+                workspace,
+                instagram_source=args.instagram_source,
+                imessage_db=args.imessage_db,
+                skip_instagram=args.skip_instagram,
+                skip_imessage=args.skip_imessage,
+                me=args.me,
+                me_instagram=args.me_instagram,
+                me_imessage=args.me_imessage,
+                render=args.render,
+            )
+        elif args.command == "configure-drive":
+            summary = command_configure_drive(workspace, instagram_drive_source=args.instagram_drive_source)
+        elif args.command == "daily-import":
+            summary = command_daily_import(
+                workspace,
+                instagram_drive_source=args.instagram_drive_source,
+                imessage_db=args.imessage_db,
+                skip_instagram=args.skip_instagram,
+                skip_imessage=args.skip_imessage,
+                render=not args.no_render,
+                write_config=args.write_config,
+                latest_instagram_only=not args.all_instagram_exports,
+                me=args.me,
+                me_instagram=args.me_instagram,
+                me_imessage=args.me_imessage,
+            )
+        elif args.command == "install-daily-import":
+            summary = command_install_daily_import(
+                workspace,
+                instagram_drive_source=args.instagram_drive_source,
+                skip_imessage=args.skip_imessage,
+                me=args.me,
+                me_instagram=args.me_instagram,
+                me_imessage=args.me_imessage,
+                hour=args.hour,
+                minute=args.minute,
+                label=args.label,
+                dry_run=args.dry_run,
+            )
         elif args.command == "render":
             summary = command_render(workspace, source=args.source)
-        elif args.command == "import":
-            summary = command_import(workspace, args)
         elif args.command == "view-name":
             summary = command_view_name(workspace, args.kind, args.label, args.source_key)
         else:
             parser.error(f"unknown command: {args.command}")
-    except (LocalgraphError, OSError, sqlite3.Error, ValueError) as exc:
+    except (FileNotFoundError, LocalgraphError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
@@ -133,6 +200,101 @@ def command_scan(workspace: Workspace, *, source: str | None) -> dict[str, objec
     return scan_instagram_source(source_path)
 
 
+def command_import(
+    workspace: Workspace,
+    *,
+    instagram_source: str | None,
+    imessage_db: str | None,
+    skip_instagram: bool,
+    skip_imessage: bool,
+    me: str,
+    me_instagram: list[str],
+    me_imessage: list[str],
+    render: bool,
+) -> dict[str, object]:
+    workspace.ensure_workspace(force=False)
+    instagram_path = _resolve_workspace_path(workspace, instagram_source) if instagram_source else workspace.instagram_source_dir
+    imessage_path = _resolve_workspace_path(workspace, imessage_db) if imessage_db else workspace.imessage_chat_db_path
+    with connect(workspace.database_path) as db:
+        initialize_schema(db)
+        result = import_workspace_sources(
+            db,
+            workspace,
+            instagram_source=instagram_path,
+            imessage_db=imessage_path,
+            import_instagram=not skip_instagram,
+            import_imessage=not skip_imessage,
+            me_name=me,
+            me_instagram_names=me_instagram,
+            me_imessage_handles=me_imessage,
+            explicit_instagram=instagram_source is not None and not skip_instagram,
+            explicit_imessage=imessage_db is not None and not skip_imessage,
+        )
+        if render:
+            result["render"] = render_views(db, workspace, source_scan=scan_instagram_source(instagram_path))
+    return result
+
+
+def command_configure_drive(workspace: Workspace, *, instagram_drive_source: str) -> dict[str, object]:
+    return configure_google_drive_source(workspace, _resolve_workspace_path(workspace, instagram_drive_source))
+
+
+def command_daily_import(
+    workspace: Workspace,
+    *,
+    instagram_drive_source: str | None,
+    imessage_db: str | None,
+    skip_instagram: bool,
+    skip_imessage: bool,
+    render: bool,
+    write_config: bool,
+    latest_instagram_only: bool,
+    me: str,
+    me_instagram: list[str],
+    me_imessage: list[str],
+) -> dict[str, object]:
+    return run_daily_import(
+        workspace,
+        instagram_drive_source=_resolve_workspace_path(workspace, instagram_drive_source) if instagram_drive_source else None,
+        imessage_db=_resolve_workspace_path(workspace, imessage_db) if imessage_db else None,
+        me_name=me,
+        me_instagram_names=me_instagram,
+        me_imessage_handles=me_imessage,
+        skip_instagram=skip_instagram,
+        skip_imessage=skip_imessage,
+        render=render,
+        write_config_on_discovery=write_config,
+        latest_instagram_only=latest_instagram_only,
+    )
+
+
+def command_install_daily_import(
+    workspace: Workspace,
+    *,
+    instagram_drive_source: str | None,
+    skip_imessage: bool,
+    me: str,
+    me_instagram: list[str],
+    me_imessage: list[str],
+    hour: int,
+    minute: int,
+    label: str,
+    dry_run: bool,
+) -> dict[str, object]:
+    return install_daily_import(
+        workspace,
+        instagram_drive_source=_resolve_workspace_path(workspace, instagram_drive_source) if instagram_drive_source else None,
+        skip_imessage=skip_imessage,
+        me_name=me,
+        me_instagram_names=me_instagram,
+        me_imessage_handles=me_imessage,
+        hour=hour,
+        minute=minute,
+        label=label,
+        dry_run=dry_run,
+    )
+
+
 def command_render(workspace: Workspace, *, source: str | None = None) -> dict[str, object]:
     if not workspace.database_path.exists():
         raise LocalgraphError(f"database does not exist: {workspace.database_path}")
@@ -140,35 +302,6 @@ def command_render(workspace: Workspace, *, source: str | None = None) -> dict[s
     with connect(workspace.database_path) as db:
         result = render_views(db, workspace, source_scan=source_scan)
     return result
-
-
-def command_import(workspace: Workspace, args: argparse.Namespace) -> dict[str, object]:
-    workspace.ensure_workspace()
-    with connect(workspace.database_path) as db:
-        initialize_schema(db)
-        if args.source_kind == "instagram":
-            source_path = _resolve_source(workspace, args.source, default=workspace.instagram_source_dir)
-            return import_instagram_source(db, source_path)
-        if args.source_kind == "imessage":
-            chat_db_path = Path(args.chat_db).expanduser() if args.chat_db else Path("~/Library/Messages/chat.db").expanduser()
-            return import_imessage_chat_db(db, chat_db_path, limit=args.limit, immutable=args.immutable)
-        if args.source_kind == "all":
-            instagram_source = _resolve_source(workspace, args.instagram_source, default=workspace.instagram_source_dir)
-            imessage_chat_db = Path(args.imessage_chat_db).expanduser() if args.imessage_chat_db else Path("~/Library/Messages/chat.db").expanduser()
-            results = {
-                "instagram": import_instagram_source(db, instagram_source),
-            }
-            try:
-                results["imessage"] = import_imessage_chat_db(db, imessage_chat_db, limit=args.imessage_limit, immutable=args.imessage_immutable)
-            except (OSError, sqlite3.Error) as exc:
-                results["imessage"] = {"sourceKind": "imessage", "sourcePath": str(imessage_chat_db), "error": str(exc), "messages": 0, "threads": 0}
-            return {
-                "sourceKind": "all",
-                "sources": results,
-                "messages": int(results["instagram"]["messages"]) + int(results["imessage"]["messages"]),
-                "threads": int(results["instagram"]["threads"]) + int(results["imessage"]["threads"]),
-            }
-    raise LocalgraphError(f"unsupported import source: {args.source_kind}")
 
 
 def command_view_name(workspace: Workspace, kind: str, label: str, source_key: str) -> dict[str, object]:
@@ -181,11 +314,9 @@ def command_view_name(workspace: Workspace, kind: str, label: str, source_key: s
     }
 
 
-def _resolve_source(workspace: Workspace, source: str | None, *, default: Path) -> Path:
-    source_path = Path(source).expanduser() if source else default
-    if not source_path.is_absolute():
-        source_path = workspace.root / source_path
-    return source_path
+def _resolve_workspace_path(workspace: Workspace, value: str) -> Path:
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else workspace.root / path
 
 
 class LocalgraphError(Exception):
