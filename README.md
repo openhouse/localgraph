@@ -35,14 +35,21 @@ media, exports, indexes, and annotations belong on local disk.
 ## Scaffold B CLI
 
 This branch includes a dependency-free Node.js CLI. It uses only Node built-ins
-and the built-in test runner.
+and the built-in test runner. It composites the strongest ideas from the three
+scaffold PRs:
+
+- canonical state schema from Scaffold A;
+- Instagram transfer discovery from Scaffold B;
+- deterministic filesystem view naming from Scaffold C.
 
 ```bash
 npm test
+node src/cli.js plan
 node src/cli.js init
 node src/cli.js doctor
 node src/cli.js scan --json
 node src/cli.js render --json
+node src/cli.js view-name person "Alice Example" "instagram:alice"
 ```
 
 `init` creates private local directories and `localgraph.config.json`. Those

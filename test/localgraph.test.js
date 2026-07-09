@@ -5,7 +5,11 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { initWorkspace, loadConfig, resolveWorkspacePaths } from '../src/config.js';
 import { scanInstagramSource } from '../src/instagram.js';
+import { plannedLayout } from '../src/layout.js';
 import { renderViews } from '../src/render.js';
+import { STATE_SCHEMA_SQL } from '../src/schema.js';
+import { slugify, stableHash, stableViewName } from '../src/slug.js';
+import { viewPath } from '../src/views.js';
 
 test('initWorkspace creates private local directories and config', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'localgraph-'));
@@ -17,6 +21,31 @@ test('initWorkspace creates private local directories and config', async () => {
   assert.equal(config.schemaVersion, 1);
   assert.equal(paths.instagramSourceDir, path.join(root, 'sources/instagram'));
   assert.match(await readFile(path.join(root, 'localgraph.config.json'), 'utf8'), /"schemaVersion": 1/);
+  assert.match(await readFile(path.join(root, 'state/schema.sql'), 'utf8'), /CREATE TABLE IF NOT EXISTS messages/);
+  assert.match(await readFile(path.join(root, 'PRIVATE-DATA-README.md'), 'utf8'), /private source exports/);
+});
+
+test('plannedLayout exposes private directories and generated view directories', () => {
+  const layout = plannedLayout('/tmp/localgraph-example');
+  assert.equal(layout.root, '/tmp/localgraph-example');
+  assert.equal(layout.privateDirectories.some((dir) => dir.name === 'sources'), true);
+  assert.equal(layout.privateDirectories.some((dir) => dir.name === 'exports'), true);
+  assert.equal(layout.viewDirectories.some((dir) => dir.kind === 'person'), true);
+});
+
+test('state schema includes source, identity, message, annotation, and graph tables', () => {
+  for (const table of ['source_imports', 'identities', 'accounts', 'threads', 'messages', 'annotations', 'graph_edges']) {
+    assert.match(STATE_SCHEMA_SQL, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
+  }
+});
+
+test('viewPath creates deterministic symlink-friendly names', () => {
+  assert.equal(slugify('Café mañana & 東京'), 'cafe-manana-and');
+  assert.match(stableHash('source-key'), /^[a-f0-9]{10}$/);
+  assert.equal(stableViewName('Alice Example', 'instagram:alice'), stableViewName('Alice Example', 'instagram:alice'));
+  assert.notEqual(stableViewName('Alice Example', 'instagram:alice'), stableViewName('Alice Example', 'instagram:bob'));
+  assert.match(viewPath('/archive/localgraph', 'person', 'Alice Example', 'instagram:alice'), /\/archive\/localgraph\/views\/people\/alice-example--[a-f0-9]{8}$/);
+  assert.throws(() => viewPath('/archive/localgraph', 'account', 'Alice', 'alice'), /Unsupported view kind/);
 });
 
 test('scanInstagramSource discovers Instagram transfer exports without reading bodies', async () => {

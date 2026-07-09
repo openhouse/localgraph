@@ -2,14 +2,16 @@
 import { parseArgs } from 'node:util';
 import { initWorkspace, loadConfig, resolveWorkspacePaths } from './config.js';
 import { scanInstagramSource } from './instagram.js';
+import { plannedLayout, renderPlan } from './layout.js';
 import { renderViews } from './render.js';
+import { viewKinds, viewPath } from './views.js';
 
-const commands = new Set(['help', 'init', 'doctor', 'scan', 'render']);
+const commands = new Set(['help', 'plan', 'init', 'doctor', 'scan', 'render', 'view-name']);
 
 async function main(argv = process.argv.slice(2)) {
   const command = commands.has(argv[0]) ? argv[0] : argv[0] ? 'help' : 'help';
   const rest = commands.has(argv[0]) ? argv.slice(1) : argv;
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
     args: rest,
     options: {
       root: { type: 'string', short: 'r' },
@@ -22,6 +24,20 @@ async function main(argv = process.argv.slice(2)) {
 
   if (command === 'help') {
     console.log(helpText());
+    return;
+  }
+
+  if (command === 'plan') {
+    const result = plannedLayout(root);
+    writeResult(result, values.json);
+    return;
+  }
+
+  if (command === 'view-name') {
+    const [kind, label, sourceKey] = positionals;
+    if (!kind || !label) throw new Error('view-name requires <kind> <label> [source-key]');
+    const result = { kind, label, sourceKey: sourceKey ?? label, path: viewPath(root, kind, label, sourceKey ?? label) };
+    writeResult(result, values.json);
     return;
   }
 
@@ -86,6 +102,14 @@ function writeResult(result, asJson = false) {
     for (const dir of result.created) console.log(`created ${dir}`);
     return;
   }
+  if ('privateDirectories' in result) {
+    console.log(renderPlan(result.root));
+    return;
+  }
+  if ('path' in result && 'kind' in result) {
+    console.log(result.path);
+    return;
+  }
   if ('exports' in result) {
     console.log(`Instagram source: ${result.sourcePath}`);
     console.log(`Exports: ${result.exports.length}`);
@@ -105,15 +129,22 @@ function helpText() {
 
 Usage:
   localgraph init [--root <path>] [--json]
+  localgraph plan [--root <path>] [--json]
   localgraph doctor [--root <path>] [--json]
   localgraph scan [--root <path>] [--source <path>] [--json]
   localgraph render [--root <path>] [--source <path>] [--json]
+  localgraph view-name <kind> <label> [source-key] [--root <path>] [--json]
 
 Commands:
+  plan    Print the private workspace and generated view layout.
   init    Create local private data directories and localgraph.config.json.
   doctor  Check configured local private directories.
   scan    Detect Instagram transfer exports without reading message bodies.
   render  Generate symlink-friendly view directories and a source manifest.
+  view-name Generate a deterministic symlink-friendly view path.
+
+View kinds:
+  ${viewKinds().join(', ')}
 `;
 }
 

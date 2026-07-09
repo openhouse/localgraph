@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { viewDirectoryForKind, viewKinds } from './views.js';
 
-const VIEW_DIRS = ['people', 'groups', 'threads', 'projects', 'tags', '_system'];
+const VIEW_DIRS = [...viewKinds().map((kind) => viewDirectoryForKind(kind)), '_system'];
 
 export async function renderViews(paths, scan) {
   for (const dir of VIEW_DIRS) await mkdir(path.join(paths.viewsDir, dir), { recursive: true, mode: 0o700 });
