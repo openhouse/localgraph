@@ -28,6 +28,7 @@ Localgraph separates evidence from projections.
    - `threads/<source>/<thread>/`
    - `projects/<project>/`
    - `tags/<tag>/`
+   - `_system/source-manifest.json`
 
 5. Annotations
 
@@ -45,3 +46,25 @@ under Meta export folders. The importer should support both:
 
 The API path is preferred for freshness because local Drive sync may lag or omit
 new transfer folders.
+
+## Filesystem View Contract
+
+Generated view paths should be stable enough to symlink into other local
+projects. Human-readable names are paired with a short hash suffix derived from
+the source key:
+
+```text
+views/people/alice-example--3a1f0d22/
+views/groups/residency-planning--a7c91f8e/
+views/threads/instagram/alice-example--9bc4d1a0/
+```
+
+This keeps paths readable while avoiding collisions when two accounts, group
+chats, or project labels share a display name.
+
+## Body-Safe Source Scans
+
+Early Instagram scanning detects transfer exports and `message_*.json` locations
+without returning message body text. Parsing message contents belongs in the
+importer layer after provenance, privacy boundaries, and canonical state are
+settled.
