@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -38,6 +39,171 @@ class ImportStats:
 
 def json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def set_source_location(
+    db: sqlite3.Connection,
+    *,
+    source_kind: str,
+    location_kind: str,
+    label: str,
+    local_path: str | None,
+    options: dict[str, object] | None = None,
+) -> int:
+    db.execute(
+        """
+        INSERT INTO source_locations (source_kind, location_kind, label, local_path, options_json)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(source_kind, location_kind, label) DO UPDATE SET
+          local_path = excluded.local_path,
+          options_json = excluded.options_json,
+          updated_at = CURRENT_TIMESTAMP
+        """,
+        (source_kind, location_kind, label, local_path, json_dumps(options or {})),
+    )
+    return int(
+        db.execute(
+            """
+            SELECT id FROM source_locations
+            WHERE source_kind = ? AND location_kind = ? AND label = ?
+            """,
+            (source_kind, location_kind, label),
+        ).fetchone()["id"]
+    )
+
+
+def get_source_location(
+    db: sqlite3.Connection,
+    *,
+    source_kind: str,
+    location_kind: str,
+    label: str,
+) -> sqlite3.Row | None:
+    return db.execute(
+        """
+        SELECT * FROM source_locations
+        WHERE source_kind = ? AND location_kind = ? AND label = ?
+        """,
+        (source_kind, location_kind, label),
+    ).fetchone()
+
+
+def start_import_run(db: sqlite3.Connection, *, run_kind: str, source_kind: str) -> int:
+    cursor = db.execute(
+        """
+        INSERT INTO import_runs (run_kind, source_kind, status, summary_json)
+        VALUES (?, ?, 'started', '{}')
+        """,
+        (run_kind, source_kind),
+    )
+    return int(cursor.lastrowid)
+
+
+def finish_import_run(
+    db: sqlite3.Connection,
+    *,
+    run_id: int,
+    status: str,
+    summary: dict[str, object] | None = None,
+    error_text: str | None = None,
+) -> None:
+    db.execute(
+        """
+        UPDATE import_runs
+        SET status = ?,
+            finished_at = ?,
+            summary_json = ?,
+            error_text = ?
+        WHERE id = ?
+        """,
+        (status, utc_now(), json_dumps(summary or {}), error_text, run_id),
+    )
+
+
+def has_completed_import_run(db: sqlite3.Connection, *, run_kind: str, source_kind: str) -> bool:
+    return bool(
+        db.execute(
+            """
+            SELECT id FROM import_runs
+            WHERE run_kind = ? AND source_kind = ? AND status = 'completed'
+            LIMIT 1
+            """,
+            (run_kind, source_kind),
+        ).fetchone()
+    )
+
+
+def record_pending_import(
+    db: sqlite3.Connection,
+    *,
+    source_kind: str,
+    source_identifier: str,
+    source_path: str | None,
+    reason: str,
+    raw_metadata: dict[str, object] | None = None,
+) -> int:
+    db.execute(
+        """
+        INSERT INTO pending_imports (source_kind, source_identifier, source_path, reason, raw_metadata_json)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(source_kind, source_identifier, reason) DO UPDATE SET
+          source_path = excluded.source_path,
+          detected_at = CURRENT_TIMESTAMP,
+          resolved_at = NULL,
+          raw_metadata_json = excluded.raw_metadata_json
+        """,
+        (source_kind, source_identifier, source_path, reason, json_dumps(raw_metadata or {})),
+    )
+    return int(
+        db.execute(
+            """
+            SELECT id FROM pending_imports
+            WHERE source_kind = ? AND source_identifier = ? AND reason = ?
+            """,
+            (source_kind, source_identifier, reason),
+        ).fetchone()["id"]
+    )
+
+
+def resolve_pending_imports(db: sqlite3.Connection, *, source_kind: str, source_identifier: str | None = None) -> int:
+    if source_identifier is None:
+        cursor = db.execute(
+            """
+            UPDATE pending_imports
+            SET resolved_at = ?
+            WHERE source_kind = ? AND resolved_at IS NULL
+            """,
+            (utc_now(), source_kind),
+        )
+    else:
+        cursor = db.execute(
+            """
+            UPDATE pending_imports
+            SET resolved_at = ?
+            WHERE source_kind = ? AND source_identifier = ? AND resolved_at IS NULL
+            """,
+            (utc_now(), source_kind, source_identifier),
+        )
+    return int(cursor.rowcount)
+
+
+def active_pending_imports(db: sqlite3.Connection, *, source_kind: str | None = None) -> list[sqlite3.Row]:
+    if source_kind is None:
+        return list(db.execute("SELECT * FROM pending_imports WHERE resolved_at IS NULL ORDER BY detected_at DESC").fetchall())
+    return list(
+        db.execute(
+            """
+            SELECT * FROM pending_imports
+            WHERE source_kind = ? AND resolved_at IS NULL
+            ORDER BY detected_at DESC
+            """,
+            (source_kind,),
+        ).fetchall()
+    )
 
 
 def upsert_source_import(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import plistlib
 import sqlite3
 import tempfile
 import unittest
@@ -53,7 +54,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             db_path = root / "state" / "localgraph.sqlite"
 
-            with sqlite3.connect(db_path) as db:
+            with contextlib.closing(sqlite3.connect(db_path)) as db:
                 db.execute(
                     "INSERT INTO identities (stable_key, display_name, kind) VALUES (?, ?, ?)",
                     ("ig:alice", "Alice Example", "person"),
@@ -66,6 +67,7 @@ class CliTests(unittest.TestCase):
                     "INSERT INTO threads (source_kind, source_thread_key, title, thread_kind) VALUES (?, ?, ?, ?)",
                     ("instagram", "messages/inbox/alice_123", "Alice Example", "direct"),
                 )
+                db.commit()
 
             code, _ = run_cli(["--root", str(root), "render"])
             self.assertEqual(code, 0)
@@ -134,7 +136,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(payload["results"]["instagram"]["groups"], 1)
             code, _ = run_cli(["--root", str(root), "import", "instagram"])
             self.assertEqual(code, 0)
-            with sqlite3.connect(root / "state" / "localgraph.sqlite") as db:
+            with contextlib.closing(sqlite3.connect(root / "state" / "localgraph.sqlite")) as db:
                 message_count = db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
             self.assertEqual(message_count, 2)
 
@@ -149,6 +151,23 @@ class CliTests(unittest.TestCase):
             transcript = (thread_dir / "messages.md").read_text(encoding="utf-8")
             self.assertIn("Dinner at 7?", transcript)
             self.assertIn("[Photo]", transcript)
+
+            person_dirs = list((root / "views" / "people").glob("alice-example--*"))
+            self.assertEqual(len(person_dirs), 1)
+            person_dir = person_dirs[0]
+            notes = person_dir / "notes.md"
+            self.assertTrue((person_dir / "llm-context.md").exists())
+            self.assertTrue((person_dir / "timeline.md").exists())
+            self.assertTrue((person_dir / "threads.md").exists())
+            self.assertTrue((person_dir / "groups.md").exists())
+            self.assertTrue((person_dir / "media.md").exists())
+            self.assertTrue((person_dir / "source-accounts.md").exists())
+            self.assertTrue((person_dir / "manifests" / "person.json").exists())
+            self.assertTrue((person_dir / "transcripts" / "groups" / f"{stable_view_name(title, thread_key)}.md").is_symlink())
+            notes.write_text("private note survives\n", encoding="utf-8")
+            code, _ = run_cli(["--root", str(root), "render"])
+            self.assertEqual(code, 0)
+            self.assertEqual(notes.read_text(encoding="utf-8"), "private note survives\n")
 
     def test_import_imessage_chat_db_creates_people_group_thread_and_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -165,7 +184,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(payload["results"]["imessage"]["groups"], 1)
             code, _ = run_cli(["--root", str(root), "import", "imessage"])
             self.assertEqual(code, 0)
-            with sqlite3.connect(root / "state" / "localgraph.sqlite") as db:
+            with contextlib.closing(sqlite3.connect(root / "state" / "localgraph.sqlite")) as db:
                 message_count = db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
             self.assertEqual(message_count, 3)
 
@@ -187,6 +206,59 @@ class CliTests(unittest.TestCase):
             self.assertIn("Bob Example", group_index)
             self.assertIn("Me", group_index)
 
+    def test_configure_drive_daily_import_pending_and_launch_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "graph"
+            drive = Path(tmp) / "drive" / "Instagram Transfers"
+            drive.mkdir(parents=True)
+            code, _ = run_cli(["--root", str(root), "init"])
+            self.assertEqual(code, 0)
+
+            code, stdout = run_cli(["--root", str(root), "configure-drive", str(drive)])
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["localPath"], str(drive.resolve()))
+
+            code, stdout = run_cli(["--root", str(root), "daily-import"])
+            self.assertEqual(code, 0)
+            pending_payload = json.loads(stdout)
+            self.assertEqual(pending_payload["status"], "pending")
+            with contextlib.closing(sqlite3.connect(root / "state" / "localgraph.sqlite")) as db:
+                pending_count = db.execute("SELECT COUNT(*) FROM pending_imports WHERE resolved_at IS NULL").fetchone()[0]
+            self.assertEqual(pending_count, 1)
+
+            create_instagram_export(drive, "instagram-export-2026-07-08", "alice_1", "Alice Example", "First materialized")
+            create_instagram_export(drive, "instagram-export-2026-07-09", "bob_1", "Bob Example", "Second materialized")
+            code, stdout = run_cli(["--root", str(root), "daily-import"])
+            self.assertEqual(code, 0)
+            bootstrap = json.loads(stdout)
+            self.assertEqual(bootstrap["mode"], "bootstrap")
+            self.assertEqual(len(bootstrap["selectedExports"]), 2)
+            self.assertEqual(bootstrap["result"]["messages"], 2)
+
+            create_instagram_export(drive, "instagram-export-2026-07-10", "cora_1", "Cora Example", "Newest materialized")
+            code, stdout = run_cli(["--root", str(root), "daily-import"])
+            self.assertEqual(code, 0)
+            incremental = json.loads(stdout)
+            self.assertEqual(incremental["mode"], "incremental")
+            self.assertEqual(len(incremental["selectedExports"]), 1)
+            self.assertIn("2026-07-10", incremental["selectedExports"][0]["name"])
+            with contextlib.closing(sqlite3.connect(root / "state" / "localgraph.sqlite")) as db:
+                message_count = db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+                completed_runs = db.execute("SELECT COUNT(*) FROM import_runs WHERE status = 'completed'").fetchone()[0]
+            self.assertEqual(message_count, 3)
+            self.assertEqual(completed_runs, 2)
+            self.assertTrue(any((root / "state" / "run-logs").glob("daily-import-*.json")))
+
+            plist_path = root / "state" / "scheduler" / "test.plist"
+            code, stdout = run_cli(["--root", str(root), "install-daily-import", "--output", str(plist_path), "--hour", "9", "--minute", "30"])
+            self.assertEqual(code, 0)
+            install_payload = json.loads(stdout)
+            self.assertEqual(install_payload["path"], str(plist_path))
+            launch_agent = plistlib.loads(plist_path.read_bytes())
+            self.assertEqual(launch_agent["StartCalendarInterval"], {"Hour": 9, "Minute": 30})
+            self.assertIn(str(root.resolve()), launch_agent["ProgramArguments"])
+
     def test_private_directories_are_gitignored(self) -> None:
         gitignore = Path(__file__).resolve().parents[1] / ".gitignore"
         ignored = gitignore.read_text(encoding="utf-8")
@@ -203,7 +275,7 @@ def run_cli(argv: list[str]) -> tuple[int, str]:
 
 def create_imessage_fixture(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as db:
+    with contextlib.closing(sqlite3.connect(path)) as db:
         db.executescript(
             """
             CREATE TABLE handle (
@@ -274,11 +346,33 @@ def create_imessage_fixture(path: Path) -> None:
             (200, "attachment-200", "~/Library/Messages/Attachments/photo.jpg", "image/jpeg", "photo.jpg", 12_345),
         )
         db.execute("INSERT INTO message_attachment_join (message_id, attachment_id) VALUES (?, ?)", (102, 200))
+        db.commit()
 
 
 def apple_ns(value: str) -> int:
     timestamp = datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc).timestamp()
     return int((timestamp - 978_307_200) * 1_000_000_000)
+
+
+def create_instagram_export(root: Path, export_name: str, thread_name: str, sender: str, content: str) -> Path:
+    thread = root / export_name / "your_instagram_activity" / "messages" / "inbox" / thread_name
+    thread.mkdir(parents=True)
+    (thread / "message_1.json").write_text(
+        json.dumps(
+            {
+                "participants": [{"name": "Jamie"}, {"name": sender}],
+                "messages": [
+                    {
+                        "sender_name": sender,
+                        "timestamp_ms": 1_788_752_000_000 + len(export_name),
+                        "content": content,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return thread
 
 
 if __name__ == "__main__":

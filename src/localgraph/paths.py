@@ -37,6 +37,14 @@ class Workspace:
         return self.root / "exports"
 
     @property
+    def run_logs_dir(self) -> Path:
+        return self.state_dir / "run-logs"
+
+    @property
+    def scheduler_dir(self) -> Path:
+        return self.state_dir / "scheduler"
+
+    @property
     def database_path(self) -> Path:
         return self.state_dir / "localgraph.sqlite"
 
@@ -92,6 +100,8 @@ class Workspace:
                 raise ValueError(f"workspace has unexpected entries; pass --force to initialize anyway: {names}")
         for directory in self.managed_directories:
             directory.mkdir(parents=True, exist_ok=True)
+        self.run_logs_dir.mkdir(parents=True, exist_ok=True)
+        self.scheduler_dir.mkdir(parents=True, exist_ok=True)
         for directory in self.view_directories:
             directory.mkdir(parents=True, exist_ok=True)
         self.instagram_source_dir.mkdir(parents=True, exist_ok=True)
@@ -128,6 +138,7 @@ class Workspace:
             "imports": {
                 "instagram": {
                     "localPath": "sources/instagram",
+                    "driveLocalPath": None,
                     "googleDriveFolderId": None,
                 },
                 "imessage": {

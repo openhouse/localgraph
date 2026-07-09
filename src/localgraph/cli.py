@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+from .daily import configure_drive_source, install_launch_agent, run_daily_instagram_import
 from .imessage import import_imessage_source
 from .instagram import import_instagram_source
 from .instagram import scan_instagram_source
@@ -37,6 +38,9 @@ def build_parser() -> argparse.ArgumentParser:
     scan = commands.add_parser("scan", help="Detect Instagram transfer exports without reading message bodies.")
     scan.add_argument("--source", help="Instagram source directory. Defaults to sources/instagram.")
 
+    configure_drive = commands.add_parser("configure-drive", help="Persist a local Google Drive Desktop Instagram source path.")
+    configure_drive.add_argument("local_path", help="Local Drive Desktop path containing materialized Instagram transfer exports.")
+
     import_command = commands.add_parser("import", help="Import private message bodies into canonical SQLite state.")
     import_command.add_argument(
         "source_kind",
@@ -48,6 +52,16 @@ def build_parser() -> argparse.ArgumentParser:
     import_command.add_argument("--source", help="Override source path when importing one source kind.")
     import_command.add_argument("--instagram-source", help="Instagram source directory. Defaults to sources/instagram.")
     import_command.add_argument("--imessage-source", help="iMessage source directory or chat.db. Defaults to sources/imessage.")
+
+    daily_import = commands.add_parser("daily-import", help="Run the daily local Instagram import.")
+    daily_import.add_argument("--source", help="Override configured Drive/Desktop source path.")
+    daily_import.add_argument("--all-instagram-exports", action="store_true", help="Import all materialized Instagram exports.")
+
+    install_daily = commands.add_parser("install-daily-import", help="Create a macOS LaunchAgent plist for daily import.")
+    install_daily.add_argument("--output", help="Optional plist output path. Defaults to ~/Library/LaunchAgents.")
+    install_daily.add_argument("--label", default="com.localgraph.daily-import", help="LaunchAgent label.")
+    install_daily.add_argument("--hour", type=int, default=8, help="Daily run hour, local time.")
+    install_daily.add_argument("--minute", type=int, default=15, help="Daily run minute, local time.")
 
     render = commands.add_parser("render", help="Render filesystem views from canonical SQLite state.")
     render.add_argument("--source", help="Optionally scan an Instagram source directory and include it in the render manifest.")
@@ -74,6 +88,8 @@ def main(argv: list[str] | None = None) -> int:
             summary = command_doctor(workspace)
         elif args.command == "scan":
             summary = command_scan(workspace, source=args.source)
+        elif args.command == "configure-drive":
+            summary = command_configure_drive(workspace, local_path=args.local_path)
         elif args.command == "import":
             summary = command_import(
                 workspace,
@@ -81,6 +97,20 @@ def main(argv: list[str] | None = None) -> int:
                 source=args.source,
                 instagram_source=args.instagram_source,
                 imessage_source=args.imessage_source,
+            )
+        elif args.command == "daily-import":
+            summary = command_daily_import(
+                workspace,
+                source=args.source,
+                all_instagram_exports=args.all_instagram_exports,
+            )
+        elif args.command == "install-daily-import":
+            summary = command_install_daily_import(
+                workspace,
+                output=args.output,
+                label=args.label,
+                hour=args.hour,
+                minute=args.minute,
             )
         elif args.command == "render":
             summary = command_render(workspace, source=args.source)
@@ -133,6 +163,12 @@ def command_scan(workspace: Workspace, *, source: str | None) -> dict[str, objec
     return scan_instagram_source(source_path)
 
 
+def command_configure_drive(workspace: Workspace, *, local_path: str) -> dict[str, object]:
+    with connect(workspace.database_path) as db:
+        initialize_schema(db)
+        return configure_drive_source(db, workspace, Path(local_path))
+
+
 def command_import(
     workspace: Workspace,
     *,
@@ -169,6 +205,36 @@ def command_import(
         "database": str(workspace.database_path),
         "results": results,
     }
+
+
+def command_daily_import(workspace: Workspace, *, source: str | None, all_instagram_exports: bool) -> dict[str, object]:
+    if not workspace.database_path.exists():
+        raise LocalgraphError(f"database does not exist: {workspace.database_path}")
+    source_path = Path(source).expanduser() if source else None
+    if source_path is not None and not source_path.is_absolute():
+        source_path = workspace.root / source_path
+    with connect(workspace.database_path) as db:
+        initialize_schema(db)
+        return run_daily_instagram_import(
+            db,
+            workspace,
+            source_path=source_path,
+            all_instagram_exports=all_instagram_exports,
+        )
+
+
+def command_install_daily_import(
+    workspace: Workspace,
+    *,
+    output: str | None,
+    label: str,
+    hour: int,
+    minute: int,
+) -> dict[str, object]:
+    output_path = Path(output).expanduser() if output else None
+    if output_path is not None and not output_path.is_absolute():
+        output_path = workspace.root / output_path
+    return install_launch_agent(workspace, output_path=output_path, label=label, hour=hour, minute=minute)
 
 
 def command_render(workspace: Workspace, *, source: str | None = None) -> dict[str, object]:

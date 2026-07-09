@@ -12,7 +12,8 @@ Localgraph separates evidence from projections.
 2. State
 
    Canonical local database state: imports, identities, accounts, threads,
-   messages, media, reactions, annotations, tags, provenance, and graph edges.
+   messages, media, reactions, annotations, tags, provenance, source locations,
+   import runs, pending imports, and graph edges.
 
 3. Objects
 
@@ -55,6 +56,12 @@ files and copied or directly referenced iMessage `chat.db` files. It writes
 people, accounts, direct/group threads, messages, media references, participant
 edges, and group membership edges into the canonical SQLite state.
 
+Daily Instagram import uses the configured local Google Drive Desktop path. The
+first successful daily run imports all materialized exports as a bootstrap. Later
+runs import the newest materialized export unless `--all-instagram-exports` is
+provided. Cloud-only or missing Drive materialization is represented as
+`pending_imports` rows rather than a hanging filesystem read.
+
 ## Filesystem View Contract
 
 Generated view paths should be stable enough to symlink into other local
@@ -69,6 +76,11 @@ views/threads/instagram/alice-example--9bc4d1a0/
 
 This keeps paths readable while avoiding collisions when two accounts, group
 chats, or project labels share a display name.
+
+Person directories are rendered as context capsules. Generated files include an
+overview, `llm-context.md`, recent timeline, thread/group/media/account tables,
+JSON manifests, and symlinked transcript evidence. `notes.md` is preserved if it
+already exists, so human-authored context survives repeated renders.
 
 ## Body-Safe Source Scans
 

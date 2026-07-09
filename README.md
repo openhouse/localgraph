@@ -51,6 +51,10 @@ python -m localgraph --root ~/Localgraph scan
 python -m localgraph --root ~/Localgraph import
 python -m localgraph --root ~/Localgraph import instagram --source ~/Downloads/instagram-export
 python -m localgraph --root ~/Localgraph import imessage --source ~/Library/Messages/chat.db
+python -m localgraph --root ~/Localgraph configure-drive ~/Library/CloudStorage/GoogleDrive-example/MyDrive/Instagram
+python -m localgraph --root ~/Localgraph daily-import
+python -m localgraph --root ~/Localgraph daily-import --all-instagram-exports
+python -m localgraph --root ~/Localgraph install-daily-import
 python -m localgraph --root ~/Localgraph render
 python -m localgraph --root ~/Localgraph view-name person "Alice Example" "instagram:alice"
 ```
@@ -73,6 +77,33 @@ sources/imessage/   # copied chat.db, or pass --source ~/Library/Messages/chat.d
 Re-running `import` is idempotent for the same source messages: identities,
 accounts, threads, messages, and media references are upserted into the
 canonical state.
+
+`configure-drive` stores a local Google Drive Desktop source path for Instagram
+transfers. `daily-import` bootstraps all materialized exports on its first
+successful run, then defaults to the newest materialized export. If Drive has not
+downloaded message files locally, the run records pending state in SQLite and
+exits cleanly. `install-daily-import` writes a macOS LaunchAgent plist and keeps
+a workspace copy under `state/scheduler/`.
+
+Person views are context capsules for humans and local agents:
+
+```text
+views/people/alice-example--3a1f0d22/
+  index.md
+  llm-context.md
+  timeline.md
+  threads.md
+  groups.md
+  media.md
+  source-accounts.md
+  notes.md
+  transcripts/
+  manifests/
+```
+
+`notes.md` is user-authored and preserved across renders. Transcript links point
+back to canonical thread `messages.md` files instead of copying private message
+bodies into each person folder.
 
 Generated view paths pair readable labels with a short hash suffix derived from
 a source key:

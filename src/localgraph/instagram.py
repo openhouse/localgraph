@@ -86,7 +86,12 @@ class InstagramThreadImport:
     messages: list[dict[str, object]] = field(default_factory=list)
 
 
-def import_instagram_source(db: sqlite3.Connection, source_path: Path) -> dict[str, object]:
+def import_instagram_source(
+    db: sqlite3.Connection,
+    source_path: Path,
+    *,
+    selected_export_paths: list[Path] | None = None,
+) -> dict[str, object]:
     source = source_path.expanduser().resolve()
     stats = ImportStats(source_kind="instagram", source_path=str(source))
     if not source.exists():
@@ -94,11 +99,14 @@ def import_instagram_source(db: sqlite3.Connection, source_path: Path) -> dict[s
         stats.note = "source path does not exist"
         return stats.to_json()
 
+    selected_exports = {path.expanduser().resolve() for path in selected_export_paths or []}
     threads: dict[str, InstagramThreadImport] = {}
     export_roots: set[Path] = set()
     message_files = sorted(path for path in source.rglob("message_*.json") if path.is_file())
     for file_path in message_files:
         export_root = detect_export_root(source, file_path)
+        if selected_exports and export_root.resolve() not in selected_exports:
+            continue
         export_roots.add(export_root)
         relative_file = file_path.relative_to(export_root).as_posix()
         thread_folder = str(Path(relative_file).parent).replace("\\", "/")
@@ -273,10 +281,14 @@ def detect_export_root(source_path: Path, file_path: Path) -> Path:
     parts = file_path.relative_to(source_path).parts
     if "your_instagram_activity" in parts:
         index = parts.index("your_instagram_activity")
+        if index == 0:
+            return source_path
         if index > 0:
             return source_path.joinpath(*parts[:index])
     if "messages" in parts:
         index = parts.index("messages")
+        if index == 0:
+            return source_path
         if index > 0:
             return source_path.joinpath(*parts[:index])
     return source_path
