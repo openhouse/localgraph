@@ -48,14 +48,41 @@ python -m localgraph --root ~/Localgraph plan
 python -m localgraph --root ~/Localgraph init
 python -m localgraph --root ~/Localgraph doctor
 python -m localgraph --root ~/Localgraph scan
+python -m localgraph --root ~/Localgraph import --me "Jamie Burkart" --render
 python -m localgraph --root ~/Localgraph render
 python -m localgraph --root ~/Localgraph view-name person "Alice Example" "instagram:alice"
 ```
 
 `init` creates the private local workspace directories and a SQLite database.
 `scan` detects Instagram transfer exports under `sources/instagram` without
-returning message bodies. `render` builds deterministic filesystem views from
-canonical SQLite state and writes `_system/source-manifest.json`.
+returning message bodies. `import` reads Instagram JSON message exports and an
+iMessage `chat.db`, normalizes people, accounts, groups, threads, messages, and
+media references into SQLite, and can immediately `--render` filesystem views.
+`render` builds deterministic filesystem views from canonical SQLite state and
+writes `_system/source-manifest.json`.
+
+Default private import locations:
+
+```text
+sources/instagram/          # Meta/Instagram export folders
+sources/imessage/chat.db    # copied macOS Messages database
+```
+
+You can also point at real source paths directly:
+
+```bash
+python -m localgraph --root ~/Localgraph import \
+  --instagram-source "/path/to/instagram-export-root-or-parent" \
+  --imessage-db "/path/to/chat.db" \
+  --me "Jamie Burkart" \
+  --me-instagram "Jamie" \
+  --me-imessage "jamie@example.com" \
+  --render
+```
+
+On macOS, `~/Library/Messages/chat.db` is usually protected by Full Disk Access.
+The simplest repeatable workflow is to copy `chat.db` plus its `chat.db-wal` and
+`chat.db-shm` siblings into `sources/imessage/`, then run the import there.
 
 Generated view paths pair readable labels with a short hash suffix derived from
 a source key:
@@ -63,4 +90,11 @@ a source key:
 ```text
 views/people/alice-example--3a1f0d22/
 views/groups/residency-planning--a7c91f8e/
+```
+
+Thread views include `index.md` metadata and `messages.md` transcripts under:
+
+```text
+views/threads/instagram/<thread>/
+views/threads/imessage/<thread>/
 ```

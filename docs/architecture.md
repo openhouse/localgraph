@@ -36,16 +36,30 @@ Localgraph separates evidence from projections.
    be stored separately from generated transcripts so render jobs can be
    rerun without destroying interpretation.
 
-## First Importer
+## First Importers
 
-The first importer target is Instagram transfer data arriving in Google Drive
-under Meta export folders. The importer should support both:
+The first implemented importers consume local source material:
 
-- Google Drive API discovery and download.
-- Local Drive Desktop folders when they are actually materialized on disk.
+- Instagram transfer data under Meta export folders, including split
+  `message_*.json` files, participant lists, message text, and media URI
+  references.
+- Apple Messages `chat.db` SQLite databases, including `chat`, `handle`,
+  `message`, `chat_message_join`, `chat_handle_join`, and attachment join
+  tables.
 
-The API path is preferred for freshness because local Drive sync may lag or omit
-new transfer folders.
+Both importers normalize into the same canonical tables:
+
+- `identities` for people and generated group identities.
+- `accounts` for source-specific handles.
+- `threads` and `thread_participants` for direct and group conversations.
+- `messages` for timestamped text and raw provenance payloads.
+- `media_objects` for referenced photos, videos, files, and iMessage
+  attachments.
+- `graph_edges` for derived thread, group, and participant relationships.
+
+The importers are intentionally local-first. Future Google Drive discovery can
+still materialize Meta exports under `sources/instagram`, but message parsing
+belongs to the same local importer path.
 
 ## Filesystem View Contract
 
@@ -68,3 +82,7 @@ Early Instagram scanning detects transfer exports and `message_*.json` locations
 without returning message body text. Parsing message contents belongs in the
 importer layer after provenance, privacy boundaries, and canonical state are
 settled.
+
+The `scan` command remains body-safe. The `import` command is the explicit
+privacy boundary where message bodies are read and written to private SQLite
+state and generated private views.

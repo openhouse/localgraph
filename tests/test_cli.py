@@ -35,6 +35,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue((root / "PRIVATE-DATA-README.md").exists())
             self.assertTrue((root / "views" / "people").is_dir())
             self.assertTrue((root / "sources" / "instagram").is_dir())
+            self.assertTrue((root / "sources" / "imessage").is_dir())
 
             code, _ = run_cli(["--root", str(root), "doctor"])
             self.assertEqual(code, 0)

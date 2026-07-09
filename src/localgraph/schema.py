@@ -109,6 +109,15 @@ def initialize_schema(db: sqlite3.Connection) -> None:
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           UNIQUE(from_kind, from_key, edge_kind, to_kind, to_key, source)
         );
+
+        CREATE INDEX IF NOT EXISTS idx_accounts_identity ON accounts(identity_id);
+        CREATE INDEX IF NOT EXISTS idx_threads_source ON threads(source_kind, source_thread_key);
+        CREATE INDEX IF NOT EXISTS idx_thread_participants_identity ON thread_participants(identity_id);
+        CREATE INDEX IF NOT EXISTS idx_messages_thread_sent ON messages(thread_id, sent_at);
+        CREATE INDEX IF NOT EXISTS idx_messages_sender_identity ON messages(sender_identity_id);
+        CREATE INDEX IF NOT EXISTS idx_media_objects_message ON media_objects(message_id);
+        CREATE INDEX IF NOT EXISTS idx_graph_edges_from ON graph_edges(from_kind, from_key, edge_kind);
+        CREATE INDEX IF NOT EXISTS idx_graph_edges_to ON graph_edges(to_kind, to_key, edge_kind);
         """
     )
     db.commit()

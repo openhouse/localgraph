@@ -12,28 +12,57 @@ def render_views(db: sqlite3.Connection, workspace: Workspace, *, source_scan: d
     workspace.views_dir.mkdir(parents=True, exist_ok=True)
     for directory in workspace.view_directories:
         directory.mkdir(parents=True, exist_ok=True)
-    people = _rows(db, "SELECT stable_key, display_name FROM identities WHERE kind = 'person' ORDER BY display_name")
-    groups = _rows(db, "SELECT stable_key, display_name FROM identities WHERE kind = 'group' ORDER BY display_name")
-    threads = _rows(db, "SELECT source_kind, source_thread_key, title, thread_kind FROM threads ORDER BY source_kind, title")
+    people = _rows(db, "SELECT id, stable_key, display_name FROM identities WHERE kind = 'person' ORDER BY display_name")
+    groups = _rows(db, "SELECT id, stable_key, display_name FROM identities WHERE kind = 'group' ORDER BY display_name")
+    threads = _rows(
+        db,
+        """
+        SELECT id, source_kind, source_thread_key, title, thread_kind, first_message_at, last_message_at
+        FROM threads
+        ORDER BY source_kind, title
+        """,
+    )
+    message_count = int(db.execute("SELECT COUNT(*) AS count FROM messages").fetchone()["count"])
 
     _write_index(workspace.views_dir / "index.md", people=people, groups=groups, threads=threads)
     for row in people:
-        _write_entity_view(workspace.views_dir / "people" / stable_view_name(row["display_name"], row["stable_key"]), row, "person")
+        _write_entity_view(
+            db,
+            workspace.views_dir / "people" / stable_view_name(row["display_name"], row["stable_key"]),
+            row,
+            "person",
+        )
     for row in groups:
-        _write_entity_view(workspace.views_dir / "groups" / stable_view_name(row["display_name"], row["stable_key"]), row, "group")
+        _write_entity_view(
+            db,
+            workspace.views_dir / "groups" / stable_view_name(row["display_name"], row["stable_key"]),
+            row,
+            "group",
+        )
     for row in threads:
-        _write_thread_view(workspace.views_dir / "threads" / row["source_kind"] / stable_view_name(row["title"], row["source_thread_key"]), row)
-    _write_system_manifest(workspace, people=people, groups=groups, threads=threads, source_scan=source_scan)
+        _write_thread_view(
+            db,
+            workspace.views_dir / "threads" / row["source_kind"] / stable_view_name(row["title"], row["source_thread_key"]),
+            row,
+        )
+    _write_system_manifest(
+        workspace,
+        people=people,
+        groups=groups,
+        threads=threads,
+        message_count=message_count,
+        source_scan=source_scan,
+    )
 
-    result = {"people": len(people), "groups": len(groups), "threads": len(threads)}
+    result = {"people": len(people), "groups": len(groups), "threads": len(threads), "messages": message_count}
     if source_scan is not None:
         result["sourceExports"] = len(source_scan["exports"])  # type: ignore[arg-type]
         result["sourceMessageFiles"] = int(source_scan["totalMessageFiles"])
     return result
 
 
-def _rows(db: sqlite3.Connection, sql: str) -> list[sqlite3.Row]:
-    return list(db.execute(sql).fetchall())
+def _rows(db: sqlite3.Connection, sql: str, parameters: tuple[object, ...] = ()) -> list[sqlite3.Row]:
+    return list(db.execute(sql, parameters).fetchall())
 
 
 def _write_index(path: Path, *, people: list[sqlite3.Row], groups: list[sqlite3.Row], threads: list[sqlite3.Row]) -> None:
@@ -47,25 +76,173 @@ def _write_index(path: Path, *, people: list[sqlite3.Row], groups: list[sqlite3.
     )
 
 
-def _write_entity_view(path: Path, row: sqlite3.Row, kind: str) -> None:
+def _write_entity_view(db: sqlite3.Connection, path: Path, row: sqlite3.Row, kind: str) -> None:
     path.mkdir(parents=True, exist_ok=True)
+    accounts = _rows(
+        db,
+        """
+        SELECT source_kind, account_key, display_name
+        FROM accounts
+        WHERE identity_id = ?
+        ORDER BY source_kind, display_name
+        """,
+        (row["id"],),
+    )
+    if kind == "group":
+        threads = _rows(
+            db,
+            """
+            SELECT DISTINCT t.source_kind, t.source_thread_key, t.title, t.thread_kind, t.first_message_at, t.last_message_at
+            FROM graph_edges AS ge
+            JOIN threads AS t ON ge.from_key = ('thread:' || t.source_kind || ':' || t.source_thread_key)
+            WHERE ge.from_kind = 'thread'
+              AND ge.edge_kind = 'represents_group'
+              AND ge.to_kind = 'identity'
+              AND ge.to_key = ?
+            ORDER BY COALESCE(t.last_message_at, ''), t.title
+            """,
+            (row["stable_key"],),
+        )
+    else:
+        threads = _rows(
+            db,
+            """
+            SELECT DISTINCT t.source_kind, t.source_thread_key, t.title, t.thread_kind, t.first_message_at, t.last_message_at
+            FROM threads AS t
+            JOIN thread_participants AS tp ON tp.thread_id = t.id
+            WHERE tp.identity_id = ?
+            ORDER BY COALESCE(t.last_message_at, ''), t.title
+            """,
+            (row["id"],),
+        )
+    participants: list[sqlite3.Row] = []
+    if kind == "group":
+        participants = _rows(
+            db,
+            """
+            SELECT i.display_name, i.stable_key
+            FROM graph_edges AS ge
+            JOIN identities AS i ON i.stable_key = ge.to_key
+            WHERE ge.from_kind = 'identity'
+              AND ge.from_key = ?
+              AND ge.edge_kind = 'has_participant'
+              AND ge.to_kind = 'identity'
+            ORDER BY i.display_name
+            """,
+            (row["stable_key"],),
+        )
+    account_lines = "".join(
+        f"- {account['source_kind']}: `{account['account_key']}` ({account['display_name']})\n"
+        for account in accounts
+    ) or "- None\n"
+    participant_block = ""
+    if kind == "group":
+        participant_lines = "".join(
+            f"- {participant['display_name']} (`{participant['stable_key']}`)\n" for participant in participants
+        ) or "- None\n"
+        participant_block = f"\n## Participants\n\n{participant_lines}"
+    thread_lines = "".join(
+        f"- {thread['title']} ({thread['source_kind']}, {thread['thread_kind']}, last: {thread['last_message_at'] or 'unknown'})\n"
+        for thread in threads
+    ) or "- None\n"
     (path / "index.md").write_text(
         f"# {row['display_name']}\n\n"
         f"- Kind: {kind}\n"
-        f"- Stable key: `{row['stable_key']}`\n",
+        f"- Stable key: `{row['stable_key']}`\n"
+        f"\n## Accounts\n\n{account_lines}"
+        f"{participant_block}"
+        f"\n## Threads\n\n{thread_lines}",
         encoding="utf-8",
     )
 
 
-def _write_thread_view(path: Path, row: sqlite3.Row) -> None:
+def _write_thread_view(db: sqlite3.Connection, path: Path, row: sqlite3.Row) -> None:
     path.mkdir(parents=True, exist_ok=True)
+    participants = _rows(
+        db,
+        """
+        SELECT DISTINCT i.display_name, i.stable_key, a.source_kind, a.account_key
+        FROM thread_participants AS tp
+        LEFT JOIN identities AS i ON i.id = tp.identity_id
+        LEFT JOIN accounts AS a ON a.id = tp.account_id
+        WHERE tp.thread_id = ?
+        ORDER BY i.display_name, a.source_kind, a.account_key
+        """,
+        (row["id"],),
+    )
+    messages = _rows(
+        db,
+        """
+        SELECT
+          m.sent_at,
+          m.body_text,
+          m.source_message_key,
+          COALESCE(i.display_name, a.display_name, 'Unknown') AS sender_name,
+          (
+            SELECT COUNT(*)
+            FROM media_objects AS mo
+            WHERE mo.message_id = m.id
+          ) AS media_count
+        FROM messages AS m
+        LEFT JOIN identities AS i ON i.id = m.sender_identity_id
+        LEFT JOIN accounts AS a ON a.id = m.sender_account_id
+        WHERE m.thread_id = ?
+        ORDER BY m.sent_at, m.id
+        """,
+        (row["id"],),
+    )
+    participant_lines = "".join(
+        f"- {participant['display_name'] or 'Unknown'}"
+        f" ({participant['source_kind'] or 'unknown'}: `{participant['account_key'] or participant['stable_key'] or 'unknown'}`)\n"
+        for participant in participants
+    ) or "- None\n"
     (path / "index.md").write_text(
         f"# {row['title']}\n\n"
         f"- Source: {row['source_kind']}\n"
         f"- Thread kind: {row['thread_kind']}\n"
-        f"- Source thread key: `{row['source_thread_key']}`\n",
+        f"- Source thread key: `{row['source_thread_key']}`\n"
+        f"- First message: {row['first_message_at'] or 'unknown'}\n"
+        f"- Last message: {row['last_message_at'] or 'unknown'}\n"
+        f"- Messages: {len(messages)}\n"
+        f"\n## Participants\n\n{participant_lines}"
+        f"\n## Transcript\n\nSee [messages.md](messages.md).\n",
         encoding="utf-8",
     )
+    (path / "messages.md").write_text(_thread_messages_markdown(row, messages), encoding="utf-8")
+
+
+def _thread_messages_markdown(row: sqlite3.Row, messages: list[sqlite3.Row]) -> str:
+    lines = [
+        f"# {row['title']} Messages",
+        "",
+        f"Source: `{row['source_kind']}`",
+        "",
+    ]
+    current_day = ""
+    for message in messages:
+        sent_at = str(message["sent_at"])
+        day = sent_at[:10]
+        if day != current_day:
+            current_day = day
+            lines.extend(["", f"## {day}", ""])
+        body = str(message["body_text"] or "").strip()
+        if not body:
+            body = "[no text]"
+        media_count = int(message["media_count"] or 0)
+        if media_count:
+            suffix = "s" if media_count != 1 else ""
+            body = f"{body}\n\n[{media_count} media attachment{suffix}]"
+        lines.extend(
+            [
+                f"**{message['sender_name']}** `{sent_at}`",
+                "",
+                body,
+                "",
+            ]
+        )
+    if not messages:
+        lines.append("No messages imported for this thread.")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _write_system_manifest(
@@ -74,6 +251,7 @@ def _write_system_manifest(
     people: list[sqlite3.Row],
     groups: list[sqlite3.Row],
     threads: list[sqlite3.Row],
+    message_count: int,
     source_scan: dict[str, object] | None,
 ) -> None:
     system_dir = workspace.views_dir / "_system"
@@ -86,6 +264,7 @@ def _write_system_manifest(
             "people": len(people),
             "groups": len(groups),
             "threads": len(threads),
+            "messages": message_count,
         },
         "source": source_scan,
     }
