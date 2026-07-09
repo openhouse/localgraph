@@ -142,6 +142,8 @@ class Workspace:
                     "localPath": "sources/instagram",
                     "googleDriveLocalPath": None,
                     "googleDriveFolderId": None,
+                    "googleDriveCachePath": "sources/instagram-drive-cache",
+                    "googleDriveTokenPath": "state/google-drive-token.json",
                 },
                 "imessage": {
                     "localPath": "sources/imessage/chat.db",

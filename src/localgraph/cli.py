@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from .automation import configure_google_drive_source, install_daily_import, run_daily_import
+from .drive import DriveAPIError, authenticate_google_drive, configure_google_drive_api, pull_google_drive_folder
 from .ingest import import_workspace_sources
 from .instagram import scan_instagram_source
 from .paths import Workspace
@@ -59,6 +60,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     configure_drive = commands.add_parser("configure-drive", help="Record the local Google Drive Instagram export folder.")
     configure_drive.add_argument("--instagram-drive-source", required=True, help="Local Google Drive folder containing Meta exports.")
+
+    drive_auth = commands.add_parser("drive-auth", help="Authorize private Google Drive API access for local pulls.")
+    drive_auth.add_argument("--client-secrets", required=True, help="Google OAuth desktop client JSON path.")
+    drive_auth.add_argument("--token-path", help="Private token output path. Defaults to state/google-drive-token.json.")
+    drive_auth.add_argument("--no-open-browser", action="store_true", help="Print the auth URL without opening a browser.")
+    drive_auth.add_argument("--port", type=int, default=0, help="Loopback OAuth port. Defaults to any free port.")
+
+    configure_drive_api = commands.add_parser("configure-drive-api", help="Record a Google Drive folder ID for authenticated pulls.")
+    configure_drive_api.add_argument("--folder-id", required=True, help="Google Drive folder ID containing Meta Instagram exports.")
+    configure_drive_api.add_argument("--cache-dir", help="Private local cache path. Defaults to sources/instagram-drive-cache.")
+    configure_drive_api.add_argument("--token-path", help="Private OAuth token path. Defaults to state/google-drive-token.json.")
+
+    drive_pull = commands.add_parser("drive-pull", help="Pull a private Google Drive folder into the local Instagram cache.")
+    drive_pull.add_argument("--folder-id", help="Google Drive folder ID. Defaults to configured imports.instagram.googleDriveFolderId.")
+    drive_pull.add_argument("--cache-dir", help="Private local cache path. Defaults to configured cache path.")
+    drive_pull.add_argument("--token-path", help="Private OAuth token path. Defaults to configured token path.")
 
     daily_import = commands.add_parser("daily-import", help="Import the daily Instagram export from Google Drive.")
     daily_import.add_argument("--instagram-drive-source", help="Local Google Drive Instagram folder. Overrides config/discovery.")
@@ -122,6 +139,28 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "configure-drive":
             summary = command_configure_drive(workspace, instagram_drive_source=args.instagram_drive_source)
+        elif args.command == "drive-auth":
+            summary = command_drive_auth(
+                workspace,
+                client_secrets=args.client_secrets,
+                token_path=args.token_path,
+                open_browser=not args.no_open_browser,
+                port=args.port,
+            )
+        elif args.command == "configure-drive-api":
+            summary = command_configure_drive_api(
+                workspace,
+                folder_id=args.folder_id,
+                cache_dir=args.cache_dir,
+                token_path=args.token_path,
+            )
+        elif args.command == "drive-pull":
+            summary = command_drive_pull(
+                workspace,
+                folder_id=args.folder_id,
+                cache_dir=args.cache_dir,
+                token_path=args.token_path,
+            )
         elif args.command == "daily-import":
             summary = command_daily_import(
                 workspace,
@@ -155,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
             summary = command_view_name(workspace, args.kind, args.label, args.source_key)
         else:
             parser.error(f"unknown command: {args.command}")
-    except (FileNotFoundError, LocalgraphError, ValueError) as exc:
+    except (DriveAPIError, FileNotFoundError, LocalgraphError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
@@ -237,6 +276,62 @@ def command_import(
 
 def command_configure_drive(workspace: Workspace, *, instagram_drive_source: str) -> dict[str, object]:
     return configure_google_drive_source(workspace, _resolve_workspace_path(workspace, instagram_drive_source))
+
+
+def command_drive_auth(
+    workspace: Workspace,
+    *,
+    client_secrets: str,
+    token_path: str | None,
+    open_browser: bool,
+    port: int,
+) -> dict[str, object]:
+    return authenticate_google_drive(
+        workspace,
+        client_secrets_path=_resolve_workspace_path(workspace, client_secrets),
+        token_path=_resolve_workspace_path(workspace, token_path) if token_path else None,
+        open_browser=open_browser,
+        port=port,
+    )
+
+
+def command_configure_drive_api(
+    workspace: Workspace,
+    *,
+    folder_id: str,
+    cache_dir: str | None,
+    token_path: str | None,
+) -> dict[str, object]:
+    return configure_google_drive_api(
+        workspace,
+        folder_id=folder_id,
+        cache_dir=_resolve_workspace_path(workspace, cache_dir) if cache_dir else None,
+        token_path=_resolve_workspace_path(workspace, token_path) if token_path else None,
+    )
+
+
+def command_drive_pull(
+    workspace: Workspace,
+    *,
+    folder_id: str | None,
+    cache_dir: str | None,
+    token_path: str | None,
+) -> dict[str, object]:
+    if folder_id is None:
+        config = json.loads(workspace.config_path.read_text(encoding="utf-8")) if workspace.config_path.exists() else {}
+        folder_id = (
+            config.get("imports", {})
+            .get("instagram", {})
+            .get("googleDriveFolderId")
+        )
+    if not folder_id:
+        raise LocalgraphError("no Google Drive folder ID configured; run configure-drive-api --folder-id <id>")
+    return pull_google_drive_folder(
+        workspace,
+        folder_id=str(folder_id),
+        cache_dir=_resolve_workspace_path(workspace, cache_dir) if cache_dir else None,
+        token_path=_resolve_workspace_path(workspace, token_path) if token_path else None,
+    ).to_json()
 
 
 def command_daily_import(

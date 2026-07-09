@@ -10,6 +10,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .drive import (
+    DriveAPIError,
+    configured_drive_cache_dir,
+    pull_configured_google_drive_source,
+)
 from .ingest import SourceImportResult, import_imessage_chat_db, import_instagram_source
 from .instagram import detect_export_root, scan_instagram_source
 from .paths import Workspace
@@ -66,6 +71,20 @@ def run_daily_import(
     latest_instagram_only: bool = True,
 ) -> dict[str, object]:
     workspace.ensure_workspace(force=False)
+    drive_pull: dict[str, object] | None = None
+    drive_pull_error: str | None = None
+    if not skip_instagram and instagram_drive_source is None:
+        try:
+            pull_result = pull_configured_google_drive_source(workspace)
+            if pull_result is not None:
+                drive_pull = pull_result.to_json()
+                instagram_drive_source = pull_result.cache_path
+        except DriveAPIError as exc:
+            drive_pull_error = str(exc)
+            cache_candidate = configured_drive_cache_dir(workspace)
+            if cache_candidate.exists() and int(scan_instagram_source(cache_candidate)["totalMessageFiles"]) > 0:
+                instagram_drive_source = cache_candidate
+
     resolution = resolve_instagram_drive_source(workspace, explicit=instagram_drive_source)
     if write_config_on_discovery and resolution.origin in {"explicit", "discovered"}:
         configure_google_drive_source(workspace, resolution.path)
@@ -135,6 +154,10 @@ def run_daily_import(
             "importPath": str(instagram_import_sources[0]) if len(instagram_import_sources) == 1 else None,
             "importPaths": [str(source) for source in instagram_import_sources],
             "latestOnly": latest_instagram_only,
+        },
+        "googleDrivePull": drive_pull or {
+            "status": "error" if drive_pull_error else "not-configured",
+            "error": drive_pull_error,
         },
         "result": result,
     }

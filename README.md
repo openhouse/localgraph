@@ -49,6 +49,7 @@ python -m localgraph --root ~/Localgraph init
 python -m localgraph --root ~/Localgraph doctor
 python -m localgraph --root ~/Localgraph scan
 python -m localgraph --root ~/Localgraph import --me "Jamie Burkart" --render
+python -m localgraph --root ~/Localgraph drive-pull
 python -m localgraph --root ~/Localgraph daily-import --me "Jamie Burkart"
 python -m localgraph --root ~/Localgraph render
 python -m localgraph --root ~/Localgraph view-name person "Alice Example" "instagram:alice"
@@ -59,11 +60,13 @@ python -m localgraph --root ~/Localgraph view-name person "Alice Example" "insta
 returning message bodies. `import` reads Instagram JSON message exports and an
 iMessage `chat.db`, normalizes people, accounts, groups, threads, messages, and
 media references into SQLite, and can immediately `--render` filesystem views.
-`daily-import` reads the configured Google Drive Instagram export folder,
-bootstraps all materialized exports on the first run, narrows subsequent runs
-to the newest synced transfer by default, appends a JSONL run log, and renders
-views. `render` builds deterministic filesystem views from canonical SQLite
-state and writes `_system/source-manifest.json`.
+`drive-pull` uses a private authenticated Google Drive API token to mirror a
+configured Drive folder into `sources/instagram-drive-cache`. `daily-import`
+runs that pull first when configured, bootstraps all materialized exports on the
+first run, narrows subsequent runs to the newest synced transfer by default,
+appends a JSONL run log, and renders views. `render` builds deterministic
+filesystem views from canonical SQLite state and writes
+`_system/source-manifest.json`.
 
 Default private import locations:
 
@@ -90,8 +93,32 @@ The simplest repeatable workflow is to copy `chat.db` plus its `chat.db-wal` and
 
 ## Daily Google Drive Import
 
-If Meta is transferring Instagram data into Google Drive each day, pin the local
-Drive Desktop folder once:
+Preferred setup is authenticated Drive API pull, not public folder sharing.
+Create a Google OAuth desktop client JSON in Google Cloud, keep it private, then
+authorize Localgraph:
+
+```bash
+python -m localgraph --root ~/Localgraph drive-auth \
+  --client-secrets "/path/to/oauth-client-secret.json"
+```
+
+Configure the private Drive folder ID from the Google Drive URL:
+
+```bash
+python -m localgraph --root ~/Localgraph configure-drive-api \
+  --folder-id "GOOGLE_DRIVE_FOLDER_ID"
+```
+
+Then test the private cache pull:
+
+```bash
+python -m localgraph --root ~/Localgraph drive-pull
+```
+
+This writes downloaded export files under `sources/instagram-drive-cache/` and
+OAuth/token state under `state/`. Both locations are ignored by git.
+
+If you also use Drive Desktop, you can still pin the local synced folder:
 
 ```bash
 python -m localgraph --root ~/Localgraph configure-drive \
@@ -107,31 +134,34 @@ python -m localgraph --root ~/Localgraph daily-import \
   --write-config
 ```
 
-The importer deliberately checks explicit and configured Drive paths before it
-tries shallow discovery under Drive Desktop roots such as `Shared drives/Instagram`
-or `My Drive/Instagram`. The first scheduled run imports every materialized
-export it can see, so the local graph starts complete. Later scheduled runs
-import only the newest export folder by default, so the job does not repeatedly
-recurse through a large Drive archive. Pass `--all-instagram-exports` when you
-intentionally want an archive-wide rescan. If Drive Desktop has not materialized
-an export locally yet, the run is recorded as `pending` instead of blocking on a
-provider-backed folder read; mark the export folder available offline if you
-want the local scheduler to import it immediately after the transfer finishes.
+The importer first tries the authenticated Drive API pull when a folder ID and
+token are configured. If API pull is not configured or fails, it falls back to
+explicit and configured local Drive paths, then shallow discovery under Drive
+Desktop roots such as `Shared drives/Instagram` or `My Drive/Instagram`. The
+first scheduled run imports every materialized export it can see, so the local
+graph starts complete. Later scheduled runs import only the newest export
+folder by default, so the job does not repeatedly recurse through a large Drive
+archive. Pass `--all-instagram-exports` when you intentionally want an
+archive-wide rescan. If Drive Desktop has not materialized an export locally
+yet, the run is recorded as `pending` instead of blocking on a provider-backed
+folder read.
 
 On macOS, install a user LaunchAgent for the daily import:
 
 ```bash
 python -m localgraph --root ~/Localgraph install-daily-import \
-  --instagram-drive-source "/Users/jamie/Library/CloudStorage/GoogleDrive-example/My Drive/Instagram" \
   --me "Jamie Burkart" \
   --me-instagram "jamieburkart" \
   --hour 3 \
   --minute 15
 ```
 
-The installer writes the job script under `state/bin/` and the LaunchAgent plist
-under `~/Library/LaunchAgents/`. Each run appends a private audit record to
-`state/daily-import-runs.jsonl` and scheduler output to `state/daily-import.*.log`.
+Omit `--instagram-drive-source` when using authenticated Drive API pull; that
+lets `daily-import` pull the configured Drive folder into the private cache
+before importing. The installer writes the job script under `state/bin/` and the
+LaunchAgent plist under `~/Library/LaunchAgents/`. Each run appends a private
+audit record to `state/daily-import-runs.jsonl` and scheduler output to
+`state/daily-import.*.log`.
 
 Generated view paths pair readable labels with a short hash suffix derived from
 a source key:

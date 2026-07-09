@@ -57,14 +57,16 @@ Both importers normalize into the same canonical tables:
   attachments.
 - `graph_edges` for derived thread, group, and participant relationships.
 
-The importers are intentionally local-first. Google Drive automation treats
-Drive Desktop as another local source path: `daily-import` resolves an explicit,
+The importers are intentionally local-first. Google Drive automation pulls
+private Drive API files into `sources/instagram-drive-cache/` before import when
+an OAuth token and folder ID are configured. The same `daily-import` path can
+also use Drive Desktop as a local source fallback: it resolves an explicit,
 configured, or shallow-discovered Instagram transfer folder, bootstraps all
 materialized exports when no prior Instagram imports exist, narrows later
 scheduled runs to the newest detected export by default, runs the same canonical
 importer, writes a private run log, and regenerates views. Message parsing stays
-in the importer layer no matter whether the source is `sources/instagram` or a
-synced Drive folder.
+in the importer layer no matter whether the source is `sources/instagram`, the
+authenticated Drive cache, or a synced Drive folder.
 
 Person views are portable context capsules. Generated files provide orientation
 (`index.md`, `llm-context.md`, `timeline.md`, `threads.md`, `groups.md`,
