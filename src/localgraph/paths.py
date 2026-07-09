@@ -63,6 +63,10 @@ class Workspace:
     def instagram_source_dir(self) -> Path:
         return self.sources_dir / "instagram"
 
+    @property
+    def imessage_source_dir(self) -> Path:
+        return self.sources_dir / "imessage"
+
     def plan(self) -> dict[str, object]:
         return {
             "root": str(self.root),
@@ -91,6 +95,7 @@ class Workspace:
         for directory in self.view_directories:
             directory.mkdir(parents=True, exist_ok=True)
         self.instagram_source_dir.mkdir(parents=True, exist_ok=True)
+        self.imessage_source_dir.mkdir(parents=True, exist_ok=True)
         self._write_config(force=force)
         self._write_private_marker()
 
@@ -124,6 +129,10 @@ class Workspace:
                 "instagram": {
                     "localPath": "sources/instagram",
                     "googleDriveFolderId": None,
+                },
+                "imessage": {
+                    "localPath": "sources/imessage",
+                    "chatDatabasePath": None,
                 }
             },
         }

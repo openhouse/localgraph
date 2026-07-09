@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+from .imessage import import_imessage_source
+from .instagram import import_instagram_source
 from .instagram import scan_instagram_source
 from .paths import Workspace
 from .render import render_views
@@ -35,6 +37,18 @@ def build_parser() -> argparse.ArgumentParser:
     scan = commands.add_parser("scan", help="Detect Instagram transfer exports without reading message bodies.")
     scan.add_argument("--source", help="Instagram source directory. Defaults to sources/instagram.")
 
+    import_command = commands.add_parser("import", help="Import private message bodies into canonical SQLite state.")
+    import_command.add_argument(
+        "source_kind",
+        nargs="?",
+        choices=("all", "instagram", "imessage"),
+        default="all",
+        help="Source to import. Defaults to all configured local sources.",
+    )
+    import_command.add_argument("--source", help="Override source path when importing one source kind.")
+    import_command.add_argument("--instagram-source", help="Instagram source directory. Defaults to sources/instagram.")
+    import_command.add_argument("--imessage-source", help="iMessage source directory or chat.db. Defaults to sources/imessage.")
+
     render = commands.add_parser("render", help="Render filesystem views from canonical SQLite state.")
     render.add_argument("--source", help="Optionally scan an Instagram source directory and include it in the render manifest.")
 
@@ -60,6 +74,14 @@ def main(argv: list[str] | None = None) -> int:
             summary = command_doctor(workspace)
         elif args.command == "scan":
             summary = command_scan(workspace, source=args.source)
+        elif args.command == "import":
+            summary = command_import(
+                workspace,
+                source_kind=args.source_kind,
+                source=args.source,
+                instagram_source=args.instagram_source,
+                imessage_source=args.imessage_source,
+            )
         elif args.command == "render":
             summary = command_render(workspace, source=args.source)
         elif args.command == "view-name":
@@ -111,6 +133,44 @@ def command_scan(workspace: Workspace, *, source: str | None) -> dict[str, objec
     return scan_instagram_source(source_path)
 
 
+def command_import(
+    workspace: Workspace,
+    *,
+    source_kind: str,
+    source: str | None,
+    instagram_source: str | None,
+    imessage_source: str | None,
+) -> dict[str, object]:
+    if not workspace.database_path.exists():
+        raise LocalgraphError(f"database does not exist: {workspace.database_path}")
+    if source and source_kind == "all":
+        raise LocalgraphError("--source can only be used with 'import instagram' or 'import imessage'")
+
+    results: dict[str, object] = {}
+    with connect(workspace.database_path) as db:
+        initialize_schema(db)
+        if source_kind in {"all", "instagram"}:
+            source_path = _resolve_import_source(
+                workspace,
+                explicit=source if source_kind == "instagram" else instagram_source,
+                default=workspace.instagram_source_dir,
+            )
+            results["instagram"] = import_instagram_source(db, source_path)
+        if source_kind in {"all", "imessage"}:
+            source_path = _resolve_import_source(
+                workspace,
+                explicit=source if source_kind == "imessage" else imessage_source,
+                default=workspace.imessage_source_dir,
+            )
+            results["imessage"] = import_imessage_source(db, source_path)
+
+    return {
+        "root": str(workspace.root),
+        "database": str(workspace.database_path),
+        "results": results,
+    }
+
+
 def command_render(workspace: Workspace, *, source: str | None = None) -> dict[str, object]:
     if not workspace.database_path.exists():
         raise LocalgraphError(f"database does not exist: {workspace.database_path}")
@@ -128,6 +188,13 @@ def command_view_name(workspace: Workspace, kind: str, label: str, source_key: s
         "sourceKey": source_key,
         "path": str(path),
     }
+
+
+def _resolve_import_source(workspace: Workspace, *, explicit: str | None, default: Path) -> Path:
+    source_path = Path(explicit).expanduser() if explicit else default
+    if not source_path.is_absolute():
+        source_path = workspace.root / source_path
+    return source_path
 
 
 class LocalgraphError(Exception):

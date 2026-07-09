@@ -48,14 +48,31 @@ python -m localgraph --root ~/Localgraph plan
 python -m localgraph --root ~/Localgraph init
 python -m localgraph --root ~/Localgraph doctor
 python -m localgraph --root ~/Localgraph scan
+python -m localgraph --root ~/Localgraph import
+python -m localgraph --root ~/Localgraph import instagram --source ~/Downloads/instagram-export
+python -m localgraph --root ~/Localgraph import imessage --source ~/Library/Messages/chat.db
 python -m localgraph --root ~/Localgraph render
 python -m localgraph --root ~/Localgraph view-name person "Alice Example" "instagram:alice"
 ```
 
 `init` creates the private local workspace directories and a SQLite database.
 `scan` detects Instagram transfer exports under `sources/instagram` without
-returning message bodies. `render` builds deterministic filesystem views from
-canonical SQLite state and writes `_system/source-manifest.json`.
+returning message bodies. `import` reads private message bodies into the local
+SQLite database from Instagram `message_*.json` exports and macOS Messages
+`chat.db` files. `render` builds deterministic filesystem views from canonical
+SQLite state, including people, groups, thread indexes, and `messages.md`
+transcripts, then writes `_system/source-manifest.json`.
+
+By default, imports read from ignored private source directories:
+
+```text
+sources/instagram/  # Meta transfer export folders containing message_*.json
+sources/imessage/   # copied chat.db, or pass --source ~/Library/Messages/chat.db
+```
+
+Re-running `import` is idempotent for the same source messages: identities,
+accounts, threads, messages, and media references are upserted into the
+canonical state.
 
 Generated view paths pair readable labels with a short hash suffix derived from
 a source key:

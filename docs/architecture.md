@@ -38,14 +38,22 @@ Localgraph separates evidence from projections.
 
 ## First Importer
 
-The first importer target is Instagram transfer data arriving in Google Drive
-under Meta export folders. The importer should support both:
+The first importer targets are Instagram transfer data and macOS Messages
+`chat.db` files.
+
+Instagram transfer data often arrives in Google Drive under Meta export folders.
+The source acquisition layer should support both:
 
 - Google Drive API discovery and download.
 - Local Drive Desktop folders when they are actually materialized on disk.
 
 The API path is preferred for freshness because local Drive sync may lag or omit
 new transfer folders.
+
+The current local importer consumes materialized Instagram `message_*.json`
+files and copied or directly referenced iMessage `chat.db` files. It writes
+people, accounts, direct/group threads, messages, media references, participant
+edges, and group membership edges into the canonical SQLite state.
 
 ## Filesystem View Contract
 
@@ -68,3 +76,6 @@ Early Instagram scanning detects transfer exports and `message_*.json` locations
 without returning message body text. Parsing message contents belongs in the
 importer layer after provenance, privacy boundaries, and canonical state are
 settled.
+
+`localgraph scan` remains body-safe. `localgraph import` is the private ingest
+operation that reads message bodies into ignored local SQLite state.
