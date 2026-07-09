@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -88,6 +90,10 @@ def _write_entity_view(db: sqlite3.Connection, path: Path, row: sqlite3.Row, kin
         """,
         (row["id"],),
     )
+    if kind == "person":
+        _write_person_view(db, path, row, accounts)
+        return
+
     if kind == "group":
         threads = _rows(
             db,
@@ -154,6 +160,340 @@ def _write_entity_view(db: sqlite3.Connection, path: Path, row: sqlite3.Row, kin
         f"\n## Threads\n\n{thread_lines}",
         encoding="utf-8",
     )
+
+
+def _write_person_view(db: sqlite3.Connection, path: Path, row: sqlite3.Row, accounts: list[sqlite3.Row]) -> None:
+    threads = _person_threads(db, int(row["id"]))
+    direct_threads = [thread for thread in threads if thread["thread_kind"] == "direct"]
+    group_threads = [thread for thread in threads if thread["thread_kind"] == "group"]
+    message_count = sum(int(thread["message_count"] or 0) for thread in threads)
+    media_count = _person_media_count(db, int(row["id"]))
+    first_seen = min((str(thread["first_message_at"]) for thread in threads if thread["first_message_at"]), default="unknown")
+    last_seen = max((str(thread["last_message_at"]) for thread in threads if thread["last_message_at"]), default="unknown")
+    transcript_links = _write_person_transcript_links(path, threads)
+
+    account_lines = _account_lines(accounts)
+    direct_lines = _thread_bullets(direct_threads)
+    group_lines = _thread_bullets(group_threads)
+    recent_lines = _recent_message_lines(db, int(row["id"]))
+    transcript_lines = _transcript_bullets(transcript_links)
+
+    (path / "index.md").write_text(
+        f"# {row['display_name']}\n\n"
+        "Person context capsule.\n\n"
+        f"- Stable key: `{row['stable_key']}`\n"
+        f"- Source accounts: {len(accounts)}\n"
+        f"- Direct threads: {len(direct_threads)}\n"
+        f"- Shared group threads: {len(group_threads)}\n"
+        f"- Messages in visible threads: {message_count}\n"
+        f"- Media references in visible threads: {media_count}\n"
+        f"- First seen: {first_seen}\n"
+        f"- Last seen: {last_seen}\n"
+        "\n## Read First\n\n"
+        "- [llm-context.md](llm-context.md) gives an LLM-oriented orientation brief.\n"
+        "- [timeline.md](timeline.md) shows recent message context across shared threads.\n"
+        "- [transcripts/](transcripts/) contains symlinks to full source conversation transcripts.\n"
+        "- [notes.md](notes.md) is preserved for user-authored notes.\n"
+        "\n## Accounts\n\n"
+        f"{account_lines}"
+        "\n## Direct Threads\n\n"
+        f"{direct_lines}"
+        "\n## Shared Groups\n\n"
+        f"{group_lines}",
+        encoding="utf-8",
+    )
+    (path / "llm-context.md").write_text(
+        f"# {row['display_name']}: LLM Context\n\n"
+        "Use this folder as portable, private project context. Start here for orientation, "
+        "then follow transcript links only when full evidence is needed.\n\n"
+        "## Identity\n\n"
+        f"- Stable key: `{row['stable_key']}`\n"
+        f"- First seen: {first_seen}\n"
+        f"- Last seen: {last_seen}\n"
+        f"- Direct threads: {len(direct_threads)}\n"
+        f"- Shared group threads: {len(group_threads)}\n"
+        f"- Messages in visible threads: {message_count}\n"
+        f"- Media references in visible threads: {media_count}\n"
+        "\n## Source Accounts\n\n"
+        f"{account_lines}"
+        "\n## Full Transcript Links\n\n"
+        f"{transcript_lines}"
+        "\n## Recent Context\n\n"
+        f"{recent_lines}"
+        "\n## User Notes\n\n"
+        "See [notes.md](notes.md). Treat user-authored notes as interpretation and transcript links as evidence.\n",
+        encoding="utf-8",
+    )
+    (path / "threads.md").write_text(_threads_markdown(row, threads), encoding="utf-8")
+    (path / "groups.md").write_text(_threads_markdown(row, group_threads, title="Shared Groups"), encoding="utf-8")
+    (path / "timeline.md").write_text(_person_timeline_markdown(row, recent_lines), encoding="utf-8")
+    (path / "media.md").write_text(_person_media_markdown(db, row), encoding="utf-8")
+    (path / "source-accounts.md").write_text(_source_accounts_markdown(row, accounts), encoding="utf-8")
+    if not (path / "notes.md").exists():
+        (path / "notes.md").write_text(
+            f"# Notes: {row['display_name']}\n\n"
+            "User-authored notes go here. This file is created once and preserved across renders.\n",
+            encoding="utf-8",
+        )
+    _write_person_manifests(path, row, accounts, threads, transcript_links)
+
+
+def _person_threads(db: sqlite3.Connection, identity_id: int) -> list[sqlite3.Row]:
+    return _rows(
+        db,
+        """
+        SELECT DISTINCT
+          t.id,
+          t.source_kind,
+          t.source_thread_key,
+          t.title,
+          t.thread_kind,
+          t.first_message_at,
+          t.last_message_at,
+          (
+            SELECT COUNT(*)
+            FROM messages AS m
+            WHERE m.thread_id = t.id
+          ) AS message_count
+        FROM threads AS t
+        JOIN thread_participants AS tp ON tp.thread_id = t.id
+        WHERE tp.identity_id = ?
+        ORDER BY COALESCE(t.last_message_at, ''), t.source_kind, t.title
+        """,
+        (identity_id,),
+    )
+
+
+def _person_media_count(db: sqlite3.Connection, identity_id: int) -> int:
+    row = db.execute(
+        """
+        SELECT COUNT(DISTINCT mo.id) AS count
+        FROM media_objects AS mo
+        JOIN messages AS m ON m.id = mo.message_id
+        JOIN thread_participants AS tp ON tp.thread_id = m.thread_id
+        WHERE tp.identity_id = ?
+        """,
+        (identity_id,),
+    ).fetchone()
+    return int(row["count"] if row else 0)
+
+
+def _write_person_transcript_links(path: Path, threads: list[sqlite3.Row]) -> list[dict[str, object]]:
+    transcripts_dir = path / "transcripts"
+    _reset_generated_dir(transcripts_dir / "direct")
+    _reset_generated_dir(transcripts_dir / "groups")
+    links: list[dict[str, object]] = []
+    for thread in threads:
+        category = "direct" if thread["thread_kind"] == "direct" else "groups"
+        filename = f"{thread['source_kind']}-{stable_view_name(thread['title'], thread['source_thread_key'])}.md"
+        link_path = transcripts_dir / category / filename
+        target_path = (
+            path.parents[1]
+            / "threads"
+            / str(thread["source_kind"])
+            / stable_view_name(thread["title"], thread["source_thread_key"])
+            / "messages.md"
+        )
+        _replace_symlink(link_path, target_path)
+        links.append(
+            {
+                "title": thread["title"],
+                "sourceKind": thread["source_kind"],
+                "threadKind": thread["thread_kind"],
+                "sourceThreadKey": thread["source_thread_key"],
+                "messageCount": int(thread["message_count"] or 0),
+                "firstMessageAt": thread["first_message_at"],
+                "lastMessageAt": thread["last_message_at"],
+                "path": _display_path(path, link_path),
+                "target": _display_path(path, target_path),
+            }
+        )
+    return links
+
+
+def _reset_generated_dir(path: Path) -> None:
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        else:
+            shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def _replace_symlink(link_path: Path, target_path: Path) -> None:
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    if link_path.exists() or link_path.is_symlink():
+        if link_path.is_dir() and not link_path.is_symlink():
+            shutil.rmtree(link_path)
+        else:
+            link_path.unlink()
+    relative_target = os.path.relpath(target_path, link_path.parent)
+    link_path.symlink_to(relative_target)
+
+
+def _account_lines(accounts: list[sqlite3.Row]) -> str:
+    return "".join(
+        f"- {account['source_kind']}: `{account['account_key']}` ({account['display_name']})\n"
+        for account in accounts
+    ) or "- None\n"
+
+
+def _thread_bullets(threads: list[sqlite3.Row]) -> str:
+    return "".join(
+        f"- {thread['title']} ({thread['source_kind']}, {thread['message_count']} messages, "
+        f"last: {thread['last_message_at'] or 'unknown'})\n"
+        for thread in threads
+    ) or "- None\n"
+
+
+def _transcript_bullets(links: list[dict[str, object]]) -> str:
+    return "".join(
+        f"- [{link['title']}]({link['path']}) "
+        f"({link['sourceKind']}, {link['threadKind']}, {link['messageCount']} messages)\n"
+        for link in links
+    ) or "- None\n"
+
+
+def _recent_message_lines(db: sqlite3.Connection, identity_id: int, *, limit: int = 40) -> str:
+    messages = _rows(
+        db,
+        """
+        SELECT DISTINCT
+          m.sent_at,
+          t.source_kind,
+          t.title AS thread_title,
+          t.thread_kind,
+          COALESCE(sender.display_name, account.display_name, 'Unknown') AS sender_name,
+          m.body_text
+        FROM messages AS m
+        JOIN threads AS t ON t.id = m.thread_id
+        JOIN thread_participants AS tp ON tp.thread_id = t.id
+        LEFT JOIN identities AS sender ON sender.id = m.sender_identity_id
+        LEFT JOIN accounts AS account ON account.id = m.sender_account_id
+        WHERE tp.identity_id = ?
+        ORDER BY m.sent_at DESC, m.id DESC
+        LIMIT ?
+        """,
+        (identity_id, limit),
+    )
+    lines = []
+    for message in messages:
+        body = _snippet(str(message["body_text"] or "[no text]"))
+        lines.append(
+            f"- {message['sent_at']} - {message['sender_name']} in {message['thread_title']} "
+            f"({message['source_kind']}, {message['thread_kind']}): {body}\n"
+        )
+    return "".join(lines) or "- No messages imported yet.\n"
+
+
+def _threads_markdown(row: sqlite3.Row, threads: list[sqlite3.Row], *, title: str = "Threads") -> str:
+    lines = [f"# {row['display_name']} {title}", ""]
+    if not threads:
+        lines.append("No threads imported yet.")
+    else:
+        lines.extend(["| Source | Thread | Kind | Messages | First | Last |", "|---|---|---|---:|---|---|"])
+        for thread in threads:
+            lines.append(
+                f"| {thread['source_kind']} | {thread['title']} | {thread['thread_kind']} | "
+                f"{thread['message_count']} | {thread['first_message_at'] or 'unknown'} | "
+                f"{thread['last_message_at'] or 'unknown'} |"
+            )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _person_timeline_markdown(row: sqlite3.Row, recent_lines: str) -> str:
+    return (
+        f"# {row['display_name']} Timeline\n\n"
+        "Recent imported messages across threads where this person participates. "
+        "Use transcript symlinks for full conversation evidence.\n\n"
+        f"{recent_lines}"
+    )
+
+
+def _person_media_markdown(db: sqlite3.Connection, row: sqlite3.Row, *, limit: int = 100) -> str:
+    media = _rows(
+        db,
+        """
+        SELECT DISTINCT
+          mo.source_uri,
+          mo.local_path,
+          mo.mime_type,
+          t.source_kind,
+          t.title AS thread_title,
+          m.sent_at
+        FROM media_objects AS mo
+        JOIN messages AS m ON m.id = mo.message_id
+        JOIN threads AS t ON t.id = m.thread_id
+        JOIN thread_participants AS tp ON tp.thread_id = t.id
+        WHERE tp.identity_id = ?
+        ORDER BY m.sent_at DESC, mo.id DESC
+        LIMIT ?
+        """,
+        (row["id"], limit),
+    )
+    lines = [f"# {row['display_name']} Media", ""]
+    if not media:
+        lines.append("No media references imported yet.")
+    else:
+        for item in media:
+            source = item["local_path"] or item["source_uri"] or "unknown media"
+            lines.append(
+                f"- {item['sent_at']} - {source} ({item['mime_type'] or 'unknown type'}, "
+                f"{item['source_kind']} / {item['thread_title']})"
+            )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _source_accounts_markdown(row: sqlite3.Row, accounts: list[sqlite3.Row]) -> str:
+    return f"# {row['display_name']} Source Accounts\n\n" + _account_lines(accounts)
+
+
+def _write_person_manifests(
+    path: Path,
+    row: sqlite3.Row,
+    accounts: list[sqlite3.Row],
+    threads: list[sqlite3.Row],
+    transcript_links: list[dict[str, object]],
+) -> None:
+    manifests_dir = path / "manifests"
+    _reset_generated_dir(manifests_dir)
+    person = {
+        "displayName": row["display_name"],
+        "stableKey": row["stable_key"],
+        "kind": "person",
+        "accounts": len(accounts),
+        "threads": len(threads),
+        "transcripts": len(transcript_links),
+    }
+    accounts_payload = [
+        {
+            "sourceKind": account["source_kind"],
+            "accountKey": account["account_key"],
+            "displayName": account["display_name"],
+        }
+        for account in accounts
+    ]
+    _write_json(manifests_dir / "person.json", person)
+    _write_json(manifests_dir / "accounts.json", accounts_payload)
+    _write_json(manifests_dir / "transcripts.json", transcript_links)
+
+
+def _write_json(path: Path, payload: object) -> None:
+    path.write_text(f"{json.dumps(payload, indent=2, sort_keys=True)}\n", encoding="utf-8")
+
+
+def _snippet(value: str, *, limit: int = 180) -> str:
+    clean = " ".join(value.split())
+    if len(clean) <= limit:
+        return clean
+    return f"{clean[: limit - 3]}..."
+
+
+def _display_path(root: Path, path: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def _write_thread_view(db: sqlite3.Connection, path: Path, row: sqlite3.Row) -> None:

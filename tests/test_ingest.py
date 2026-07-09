@@ -87,6 +87,22 @@ class IngestTests(unittest.TestCase):
             self.assertIn("Alice", group_view)
             self.assertIn("Bob", group_view)
             self.assertIn("Residency Planning (instagram, group", group_view)
+            alice_view = next((root / "views" / "people").glob("alice*"))
+            self.assertTrue((alice_view / "llm-context.md").exists())
+            self.assertTrue((alice_view / "timeline.md").exists())
+            self.assertTrue((alice_view / "source-accounts.md").exists())
+            self.assertTrue((alice_view / "notes.md").exists())
+            direct_links = list((alice_view / "transcripts" / "direct").glob("*.md"))
+            group_links = list((alice_view / "transcripts" / "groups").glob("*.md"))
+            self.assertEqual(len(direct_links), 1)
+            self.assertEqual(len(group_links), 1)
+            self.assertTrue(direct_links[0].is_symlink())
+            self.assertTrue(group_links[0].is_symlink())
+            transcript_manifest = json.loads((alice_view / "manifests" / "transcripts.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(transcript_manifest), 2)
+            llm_context = (alice_view / "llm-context.md").read_text(encoding="utf-8")
+            self.assertIn("Full Transcript Links", llm_context)
+            self.assertIn("Alice", llm_context)
 
     def test_import_imessage_chat_db_direct_group_and_attachment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -93,11 +93,19 @@ class AutomationTests(unittest.TestCase):
             self.assertEqual(code, 0)
             payload = json.loads(stdout)
             self.assertEqual(payload["instagram"]["origin"], "explicit")
-            self.assertEqual(payload["instagram"]["importPath"], str((drive_source / "meta-new" / "instagram-jamie-new").resolve()))
+            self.assertIsNone(payload["instagram"]["importPath"])
+            self.assertTrue(payload["instagram"]["bootstrap"])
+            self.assertEqual(
+                payload["instagram"]["importPaths"],
+                [
+                    str((drive_source / "meta-old" / "instagram-jamie-old").resolve()),
+                    str((drive_source / "meta-new" / "instagram-jamie-new").resolve()),
+                ],
+            )
             self.assertTrue(payload["instagram"]["latestOnly"])
-            self.assertEqual(payload["result"]["totals"]["messages"], 1)
-            self.assertEqual(payload["result"]["totals"]["threads"], 1)
-            self.assertEqual(payload["result"]["render"]["threads"], 1)
+            self.assertEqual(payload["result"]["totals"]["messages"], 2)
+            self.assertEqual(payload["result"]["totals"]["threads"], 2)
+            self.assertEqual(payload["result"]["render"]["threads"], 2)
             self.assertTrue((root / "state" / "daily-import-runs.jsonl").exists())
             config = json.loads((root / "localgraph.config.json").read_text(encoding="utf-8"))
             self.assertEqual(config["imports"]["instagram"]["googleDriveLocalPath"], str(drive_source.resolve()))
@@ -105,7 +113,8 @@ class AutomationTests(unittest.TestCase):
                 encoding="utf-8"
             )
             self.assertIn("daily drive hello", transcript)
-            self.assertNotIn("old drive hello", transcript)
+            bob_transcript = next((root / "views" / "threads" / "instagram").glob("bob*/messages.md")).read_text(encoding="utf-8")
+            self.assertIn("old drive hello", bob_transcript)
 
     def test_configure_drive_records_source_without_scanning_message_bodies(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

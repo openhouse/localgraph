@@ -59,11 +59,20 @@ Both importers normalize into the same canonical tables:
 
 The importers are intentionally local-first. Google Drive automation treats
 Drive Desktop as another local source path: `daily-import` resolves an explicit,
-configured, or shallow-discovered Instagram transfer folder, narrows scheduled
-runs to the newest detected export by default, runs the same canonical importer,
-writes a private run log, and regenerates views. Message parsing stays in the
-importer layer no matter whether the source is `sources/instagram` or a synced
-Drive folder.
+configured, or shallow-discovered Instagram transfer folder, bootstraps all
+materialized exports when no prior Instagram imports exist, narrows later
+scheduled runs to the newest detected export by default, runs the same canonical
+importer, writes a private run log, and regenerates views. Message parsing stays
+in the importer layer no matter whether the source is `sources/instagram` or a
+synced Drive folder.
+
+Person views are portable context capsules. Generated files provide orientation
+(`index.md`, `llm-context.md`, `timeline.md`, `threads.md`, `groups.md`,
+`source-accounts.md`, `media.md`) while `transcripts/` contains symlinks to
+canonical full thread transcripts. `notes.md` is created once and preserved as a
+user-authored interpretation layer. This lets a project temporarily symlink a
+person directory into its working tree without copying private source data or
+breaking the canonical thread views.
 
 ## Filesystem View Contract
 

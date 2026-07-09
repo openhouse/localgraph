@@ -60,9 +60,10 @@ returning message bodies. `import` reads Instagram JSON message exports and an
 iMessage `chat.db`, normalizes people, accounts, groups, threads, messages, and
 media references into SQLite, and can immediately `--render` filesystem views.
 `daily-import` reads the configured Google Drive Instagram export folder,
-selects the newest synced transfer by default, appends a JSONL run log, and
-renders views. `render` builds deterministic filesystem views from canonical
-SQLite state and writes `_system/source-manifest.json`.
+bootstraps all materialized exports on the first run, narrows subsequent runs
+to the newest synced transfer by default, appends a JSONL run log, and renders
+views. `render` builds deterministic filesystem views from canonical SQLite
+state and writes `_system/source-manifest.json`.
 
 Default private import locations:
 
@@ -108,13 +109,14 @@ python -m localgraph --root ~/Localgraph daily-import \
 
 The importer deliberately checks explicit and configured Drive paths before it
 tries shallow discovery under Drive Desktop roots such as `Shared drives/Instagram`
-or `My Drive/Instagram`. Scheduled runs import only the newest export folder by
-default, so the job does not repeatedly recurse through a large Drive archive.
-Pass `--all-instagram-exports` when you intentionally want an archive-wide
-rescan. If Drive Desktop has not materialized an export locally yet, the run is
-recorded as `pending` instead of blocking on a provider-backed folder read; mark
-the export folder available offline if you want the local scheduler to import it
-immediately after the transfer finishes.
+or `My Drive/Instagram`. The first scheduled run imports every materialized
+export it can see, so the local graph starts complete. Later scheduled runs
+import only the newest export folder by default, so the job does not repeatedly
+recurse through a large Drive archive. Pass `--all-instagram-exports` when you
+intentionally want an archive-wide rescan. If Drive Desktop has not materialized
+an export locally yet, the run is recorded as `pending` instead of blocking on a
+provider-backed folder read; mark the export folder available offline if you
+want the local scheduler to import it immediately after the transfer finishes.
 
 On macOS, install a user LaunchAgent for the daily import:
 
@@ -145,3 +147,31 @@ Thread views include `index.md` metadata and `messages.md` transcripts under:
 views/threads/instagram/<thread>/
 views/threads/imessage/<thread>/
 ```
+
+Person views are designed as portable context capsules. A person directory can
+be temporarily symlinked into a project workspace so a local LLM has a readable
+orientation layer plus links to the full source transcripts:
+
+```text
+views/people/alice-example--3a1f0d22/
+  index.md
+  llm-context.md
+  timeline.md
+  threads.md
+  groups.md
+  media.md
+  source-accounts.md
+  notes.md
+  transcripts/
+    direct/
+      instagram-alice-example--9bc4d1a0.md -> ../../../threads/instagram/.../messages.md
+    groups/
+      instagram-residency-planning--a7c91f8e.md -> ../../../threads/instagram/.../messages.md
+  manifests/
+    person.json
+    accounts.json
+    transcripts.json
+```
+
+`notes.md` is user-authored and preserved across renders. The other files are
+generated orientation, navigation, provenance, and transcript-link material.

@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import plistlib
 import shlex
+import sqlite3
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .ingest import SourceImportResult, import_workspace_sources
+from .ingest import SourceImportResult, import_imessage_chat_db, import_instagram_source
 from .instagram import detect_export_root, scan_instagram_source
 from .paths import Workspace
 from .render import render_views
@@ -69,46 +70,60 @@ def run_daily_import(
     if write_config_on_discovery and resolution.origin in {"explicit", "discovered"}:
         configure_google_drive_source(workspace, resolution.path)
 
-    instagram_import_source: Path | None = resolution.path
+    instagram_import_sources: list[Path] = []
     instagram_pending_warning: str | None = None
-    if not skip_instagram and latest_instagram_only:
-        latest_source = resolve_latest_instagram_export_source(resolution.path)
-        if latest_source is None:
-            instagram_import_source = None
-            instagram_pending_warning = (
-                "no materialized Instagram export found under the Google Drive source; "
-                "Drive may still be syncing or the folder may be online-only"
-            )
-        else:
-            instagram_import_source = latest_source
 
     imessage_path = imessage_db.expanduser().resolve() if imessage_db else workspace.imessage_chat_db_path
-    import_instagram = not skip_instagram and instagram_import_source is not None
     with connect(workspace.database_path) as db:
         initialize_schema(db)
-        result = import_workspace_sources(
-            db,
-            workspace,
-            instagram_source=instagram_import_source or resolution.path,
-            imessage_db=imessage_path,
-            import_instagram=import_instagram,
-            import_imessage=not skip_imessage,
-            me_name=me_name,
-            me_instagram_names=me_instagram_names or [],
-            me_imessage_handles=me_imessage_handles or [],
-            explicit_instagram=instagram_drive_source is not None and not skip_instagram,
-            explicit_imessage=imessage_db is not None and not skip_imessage,
-        )
-        if instagram_pending_warning is not None:
-            pending = SourceImportResult(
-                "instagram",
-                str(resolution.path),
-                status="pending",
-                warnings=[instagram_pending_warning],
+        bootstrap_instagram = False
+        if not skip_instagram:
+            bootstrap_instagram = (not latest_instagram_only) or (not _has_instagram_imports(db))
+            instagram_import_sources = resolve_instagram_import_sources(
+                resolution.path,
+                all_materialized_exports=bootstrap_instagram,
             )
-            result["sources"].insert(0, pending.to_json())  # type: ignore[index]
+            if not instagram_import_sources:
+                instagram_pending_warning = (
+                    "no materialized Instagram export found under the Google Drive source; "
+                    "Drive may still be syncing or the folder may be online-only"
+                )
+
+        source_results: list[SourceImportResult] = []
+        if not skip_instagram:
+            if instagram_pending_warning is not None:
+                source_results.append(
+                    SourceImportResult(
+                        "instagram",
+                        str(resolution.path),
+                        status="pending",
+                        warnings=[instagram_pending_warning],
+                    )
+                )
+            else:
+                for source in instagram_import_sources:
+                    source_results.append(
+                        import_instagram_source(
+                            db,
+                            source,
+                            me_name=me_name,
+                            me_names=me_instagram_names or [],
+                            explicit=instagram_drive_source is not None,
+                        )
+                    )
+        if not skip_imessage:
+            source_results.append(
+                import_imessage_chat_db(
+                    db,
+                    imessage_path,
+                    me_name=me_name,
+                    me_handles=me_imessage_handles or [],
+                    explicit=imessage_db is not None,
+                )
+            )
+        result = _combined_import_result(source_results)
         if render:
-            source_scan = scan_instagram_source(instagram_import_source) if import_instagram else None
+            source_scan = combined_instagram_source_scan(instagram_import_sources) if instagram_import_sources else None
             result["render"] = render_views(db, workspace, source_scan=source_scan)
 
     summary = {
@@ -116,7 +131,9 @@ def run_daily_import(
         "workspace": str(workspace.root),
         "instagram": {
             **resolution.to_json(),
-            "importPath": str(instagram_import_source) if instagram_import_source is not None else None,
+            "bootstrap": bootstrap_instagram,
+            "importPath": str(instagram_import_sources[0]) if len(instagram_import_sources) == 1 else None,
+            "importPaths": [str(source) for source in instagram_import_sources],
             "latestOnly": latest_instagram_only,
         },
         "result": result,
@@ -178,18 +195,28 @@ def latest_instagram_export_source(source_path: Path) -> Path:
 
 
 def resolve_latest_instagram_export_source(source_path: Path) -> Path | None:
-    source = source_path.expanduser().resolve()
-    indexed_candidates = _indexed_instagram_export_sources(source)
-    if indexed_candidates:
-        return max(indexed_candidates, key=_path_freshness_key)
+    sources = resolve_instagram_import_sources(source_path, all_materialized_exports=False)
+    return sources[0] if sources else None
 
-    candidates = _subprocess_shallow_instagram_export_sources(source)
+
+def resolve_instagram_import_sources(source_path: Path, *, all_materialized_exports: bool) -> list[Path]:
+    source = source_path.expanduser().resolve()
+    candidates = _materialized_instagram_export_sources(source)
+
     if candidates:
-        return max(candidates, key=_path_freshness_key)
+        sorted_candidates = sorted(set(candidates), key=_path_freshness_key)
+        if all_materialized_exports:
+            return sorted_candidates
+        return [sorted_candidates[-1]]
 
     if _is_google_drive_path(source):
-        return None
-    return source
+        return []
+    return [source]
+
+
+def _materialized_instagram_export_sources(source: Path) -> list[Path]:
+    candidates = [*(_indexed_instagram_export_sources(source)), *(_subprocess_shallow_instagram_export_sources(source))]
+    return sorted(set(candidates), key=_path_freshness_key)
 
 
 def google_drive_roots(home: Path | None = None) -> list[Path]:
@@ -333,6 +360,40 @@ def load_config(workspace: Workspace) -> dict[str, object]:
 
 def write_config(workspace: Workspace, config: dict[str, object]) -> None:
     workspace.config_path.write_text(f"{json.dumps(config, indent=2, sort_keys=True)}\n", encoding="utf-8")
+
+
+def combined_instagram_source_scan(sources: list[Path]) -> dict[str, object]:
+    scans = [scan_instagram_source(source) for source in sources]
+    exports: list[object] = []
+    total_message_files = 0
+    for scan in scans:
+        exports.extend(scan["exports"])  # type: ignore[arg-type]
+        total_message_files += int(scan["totalMessageFiles"])
+    return {
+        "sourceKind": "instagram",
+        "sourcePath": ", ".join(str(source) for source in sources),
+        "exports": exports,
+        "totalMessageFiles": total_message_files,
+    }
+
+
+def _combined_import_result(results: list[SourceImportResult]) -> dict[str, object]:
+    return {
+        "sources": [result.to_json() for result in results],
+        "totals": {
+            "imports": sum(result.imports for result in results),
+            "threads": sum(result.threads for result in results),
+            "groups": sum(result.groups for result in results),
+            "accounts": sum(result.accounts for result in results),
+            "messages": sum(result.messages for result in results),
+            "media": sum(result.media for result in results),
+        },
+    }
+
+
+def _has_instagram_imports(db: sqlite3.Connection) -> bool:
+    row = db.execute("SELECT COUNT(*) AS count FROM source_imports WHERE source_kind = 'instagram'").fetchone()
+    return bool(row and int(row["count"]) > 0)
 
 
 def _now_iso() -> str:
