@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from collections.abc import Iterator
 import sqlite3
 from pathlib import Path
 
 
-def connect(path: Path) -> sqlite3.Connection:
+@contextmanager
+def connect(path: Path) -> Iterator[sqlite3.Connection]:
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys = ON")
     db.execute("PRAGMA journal_mode = WAL")
-    return db
+    try:
+        yield db
+        db.commit()
+    finally:
+        db.close()
 
 
 def initialize_schema(db: sqlite3.Connection) -> None:
@@ -23,6 +30,41 @@ def initialize_schema(db: sqlite3.Connection) -> None:
           source_path TEXT,
           imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           raw_metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE TABLE IF NOT EXISTS source_locations (
+          id INTEGER PRIMARY KEY,
+          source_kind TEXT NOT NULL,
+          location_kind TEXT NOT NULL,
+          label TEXT NOT NULL,
+          local_path TEXT,
+          options_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(source_kind, location_kind, label)
+        );
+
+        CREATE TABLE IF NOT EXISTS import_runs (
+          id INTEGER PRIMARY KEY,
+          run_kind TEXT NOT NULL,
+          source_kind TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('started', 'completed', 'pending', 'failed')),
+          started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          finished_at TEXT,
+          summary_json TEXT NOT NULL DEFAULT '{}',
+          error_text TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS pending_imports (
+          id INTEGER PRIMARY KEY,
+          source_kind TEXT NOT NULL,
+          source_identifier TEXT NOT NULL,
+          source_path TEXT,
+          reason TEXT NOT NULL,
+          detected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          resolved_at TEXT,
+          raw_metadata_json TEXT NOT NULL DEFAULT '{}',
+          UNIQUE(source_kind, source_identifier, reason)
         );
 
         CREATE TABLE IF NOT EXISTS identities (

@@ -12,7 +12,8 @@ Localgraph separates evidence from projections.
 2. State
 
    Canonical local database state: imports, identities, accounts, threads,
-   messages, media, reactions, annotations, tags, provenance, and graph edges.
+   messages, media, reactions, annotations, tags, provenance, source locations,
+   import runs, pending imports, and graph edges.
 
 3. Objects
 
@@ -38,14 +39,28 @@ Localgraph separates evidence from projections.
 
 ## First Importer
 
-The first importer target is Instagram transfer data arriving in Google Drive
-under Meta export folders. The importer should support both:
+The first importer targets are Instagram transfer data and macOS Messages
+`chat.db` files.
+
+Instagram transfer data often arrives in Google Drive under Meta export folders.
+The source acquisition layer should support both:
 
 - Google Drive API discovery and download.
 - Local Drive Desktop folders when they are actually materialized on disk.
 
 The API path is preferred for freshness because local Drive sync may lag or omit
 new transfer folders.
+
+The current local importer consumes materialized Instagram `message_*.json`
+files and copied or directly referenced iMessage `chat.db` files. It writes
+people, accounts, direct/group threads, messages, media references, participant
+edges, and group membership edges into the canonical SQLite state.
+
+Daily Instagram import uses the configured local Google Drive Desktop path. The
+first successful daily run imports all materialized exports as a bootstrap. Later
+runs import the newest materialized export unless `--all-instagram-exports` is
+provided. Cloud-only or missing Drive materialization is represented as
+`pending_imports` rows rather than a hanging filesystem read.
 
 ## Filesystem View Contract
 
@@ -62,9 +77,17 @@ views/threads/instagram/alice-example--9bc4d1a0/
 This keeps paths readable while avoiding collisions when two accounts, group
 chats, or project labels share a display name.
 
+Person directories are rendered as context capsules. Generated files include an
+overview, `llm-context.md`, recent timeline, thread/group/media/account tables,
+JSON manifests, and symlinked transcript evidence. `notes.md` is preserved if it
+already exists, so human-authored context survives repeated renders.
+
 ## Body-Safe Source Scans
 
 Early Instagram scanning detects transfer exports and `message_*.json` locations
 without returning message body text. Parsing message contents belongs in the
 importer layer after provenance, privacy boundaries, and canonical state are
 settled.
+
+`localgraph scan` remains body-safe. `localgraph import` is the private ingest
+operation that reads message bodies into ignored local SQLite state.
