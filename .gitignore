@@ -6,6 +6,7 @@
 /annotations/
 /exports/
 PRIVATE-DATA-README.md
+localgraph.config.json
 
 # Local config and secrets
 .env

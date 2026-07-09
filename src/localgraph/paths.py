@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
+
+PRIVATE_DIRECTORY_NAMES = ("sources", "state", "objects", "views", "annotations", "exports")
+VIEW_DIRECTORY_NAMES = ("people", "groups", "threads", "projects", "tags", "_system")
 
 
 @dataclass(frozen=True)
@@ -29,8 +33,16 @@ class Workspace:
         return self.root / "annotations"
 
     @property
+    def exports_dir(self) -> Path:
+        return self.root / "exports"
+
+    @property
     def database_path(self) -> Path:
         return self.state_dir / "localgraph.sqlite"
+
+    @property
+    def config_path(self) -> Path:
+        return self.root / "localgraph.config.json"
 
     @property
     def managed_directories(self) -> tuple[Path, ...]:
@@ -40,19 +52,46 @@ class Workspace:
             self.objects_dir,
             self.views_dir,
             self.annotations_dir,
+            self.exports_dir,
         )
+
+    @property
+    def view_directories(self) -> tuple[Path, ...]:
+        return tuple(self.views_dir / name for name in VIEW_DIRECTORY_NAMES)
+
+    @property
+    def instagram_source_dir(self) -> Path:
+        return self.sources_dir / "instagram"
+
+    def plan(self) -> dict[str, object]:
+        return {
+            "root": str(self.root),
+            "configPath": str(self.config_path),
+            "privateDirectories": [
+                {"name": path.name, "path": str(path)}
+                for path in self.managed_directories
+            ],
+            "viewDirectories": [
+                {"name": path.name, "path": str(path)}
+                for path in self.view_directories
+            ],
+        }
 
     def ensure_workspace(self, *, force: bool = False) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         visible_entries = [entry for entry in self.root.iterdir() if entry.name not in {".git", ".gitignore"}]
         if visible_entries and not force:
-            expected = {path.name for path in self.managed_directories} | {"README.md", "docs", "pyproject.toml", "src", "tests"}
+            expected = {path.name for path in self.managed_directories} | {"README.md", "docs", "pyproject.toml", "src", "tests", "localgraph.config.json"}
             unexpected = [entry for entry in visible_entries if entry.name not in expected]
             if unexpected:
                 names = ", ".join(sorted(entry.name for entry in unexpected))
                 raise ValueError(f"workspace has unexpected entries; pass --force to initialize anyway: {names}")
         for directory in self.managed_directories:
             directory.mkdir(parents=True, exist_ok=True)
+        for directory in self.view_directories:
+            directory.mkdir(parents=True, exist_ok=True)
+        self.instagram_source_dir.mkdir(parents=True, exist_ok=True)
+        self._write_config(force=force)
         self._write_private_marker()
 
     def check(self) -> dict[str, str]:
@@ -72,3 +111,20 @@ class Workspace:
             "by git.\n",
             encoding="utf-8",
         )
+
+    def _write_config(self, *, force: bool) -> None:
+        if self.config_path.exists() and not force:
+            return
+        config = {
+            "formatVersion": 1,
+            "root": str(self.root),
+            "directories": {name: name for name in PRIVATE_DIRECTORY_NAMES},
+            "views": {name: f"views/{name}" for name in VIEW_DIRECTORY_NAMES},
+            "imports": {
+                "instagram": {
+                    "localPath": "sources/instagram",
+                    "googleDriveFolderId": None,
+                }
+            },
+        }
+        self.config_path.write_text(f"{json.dumps(config, indent=2, sort_keys=True)}\n", encoding="utf-8")

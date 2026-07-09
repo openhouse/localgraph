@@ -26,21 +26,41 @@ localgraph/
   objects/      # copied/content-addressed private media, ignored by git
   views/        # generated symlink-friendly person/group/thread/project views
   annotations/  # private notes and tags, ignored by git by default
+  exports/      # private packaged exports and handoff bundles, ignored by git
   docs/         # public architecture notes
 ```
 
 The public repository contains code and design notes only. Personal messages,
 media, exports, indexes, and annotations belong on local disk.
 
-## Scaffold CLI
+## Composite Scaffold CLI
 
-The first scaffold uses only the Python standard library.
+The scaffold uses only the Python standard library. It combines the strongest
+parts of the first scaffold family:
+
+- a SQLite-first canonical state model;
+- an explicit private-root and filesystem-view contract;
+- body-safe Instagram transfer scanning;
+- deterministic symlink-friendly view paths.
 
 ```bash
+python -m localgraph --root ~/Localgraph plan
 python -m localgraph --root ~/Localgraph init
 python -m localgraph --root ~/Localgraph doctor
+python -m localgraph --root ~/Localgraph scan
 python -m localgraph --root ~/Localgraph render
+python -m localgraph --root ~/Localgraph view-name person "Alice Example" "instagram:alice"
 ```
 
 `init` creates the private local workspace directories and a SQLite database.
-`render` builds deterministic filesystem views from canonical SQLite state.
+`scan` detects Instagram transfer exports under `sources/instagram` without
+returning message bodies. `render` builds deterministic filesystem views from
+canonical SQLite state and writes `_system/source-manifest.json`.
+
+Generated view paths pair readable labels with a short hash suffix derived from
+a source key:
+
+```text
+views/people/alice-example--3a1f0d22/
+views/groups/residency-planning--a7c91f8e/
+```
