@@ -34,8 +34,8 @@ media, exports, indexes, and annotations belong on local disk.
 
 ## Quick Start
 
-This scaffold uses Node.js built-ins only; no third-party install is required
-for the first tests and CLI.
+This scaffold uses Node.js 24 built-ins only; no third-party install is
+required for the first tests and CLI.
 
 ```bash
 npm test
@@ -48,7 +48,13 @@ node src/cli.js view-name person "Alice Example" "instagram:alice"
 
 - `localgraph plan` prints the private root and view layout.
 - `localgraph init` creates a local private root with ignored source, state,
-  object, view, annotation, and export directories.
+  object, view, annotation, and export directories, then initializes the first
+  canonical SQLite schema.
+- `localgraph doctor` checks private directories and schema readiness.
+- `localgraph scan` detects local Instagram transfer exports without reading
+  message bodies.
+- `localgraph render` writes symlink-friendly view directories and a source
+  manifest.
 - `localgraph view-name` returns deterministic symlink-friendly view paths.
 
 See [docs/scaffold-plan.md](docs/scaffold-plan.md) for this branch's scope.

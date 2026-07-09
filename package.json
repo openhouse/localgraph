@@ -14,6 +14,6 @@
     "init:demo": "node src/cli.js init ./tmp/demo --force"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   }
 }

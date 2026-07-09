@@ -1,5 +1,6 @@
 import path from 'node:path';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { directoryExists, pathExists } from './fs-utils.js';
 
 export const PRIVATE_DIRECTORIES = Object.freeze([
   'sources',
@@ -59,6 +60,12 @@ export function defaultConfig(root = process.cwd()) {
       threads: 'views/threads',
       projects: 'views/projects',
       tags: 'views/tags'
+    },
+    imports: {
+      instagram: {
+        localPath: 'sources/instagram',
+        googleDriveFolderId: null
+      }
     }
   };
 }
@@ -100,13 +107,25 @@ export async function initializeRoot(root = process.cwd(), options = {}) {
   return { ...layout, created, existing, dryRun: false };
 }
 
-async function directoryExists(dirPath) {
-  try {
-    return (await stat(dirPath)).isDirectory();
-  } catch (error) {
-    if (error?.code === 'ENOENT') return false;
-    throw error;
+export async function checkRoot(root = process.cwd()) {
+  const layout = plannedLayout(root);
+  const privateDirectories = [];
+  for (const dir of layout.privateDirectories) {
+    privateDirectories.push({ name: dir.name, path: dir.path, exists: await directoryExists(dir.path) });
   }
+  const viewDirectories = [];
+  for (const dir of layout.viewDirectories) {
+    viewDirectories.push({ name: dir.name, path: dir.path, exists: await directoryExists(dir.path) });
+  }
+  const configExists = await pathExists(layout.configPath);
+  return {
+    root: layout.root,
+    configPath: layout.configPath,
+    ok: configExists && privateDirectories.every((dir) => dir.exists) && viewDirectories.every((dir) => dir.exists),
+    configExists,
+    privateDirectories,
+    viewDirectories
+  };
 }
 
 export function renderPlan(root = process.cwd()) {
