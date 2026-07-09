@@ -4,9 +4,16 @@ import sqlite3
 from pathlib import Path
 
 
+class ClosingConnection(sqlite3.Connection):
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> bool:
+        result = super().__exit__(exc_type, exc_value, traceback)
+        self.close()
+        return bool(result)
+
+
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(path)
+    db = sqlite3.connect(path, factory=ClosingConnection)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys = ON")
     db.execute("PRAGMA journal_mode = WAL")
@@ -58,11 +65,11 @@ def initialize_schema(db: sqlite3.Connection) -> None:
         );
 
         CREATE TABLE IF NOT EXISTS thread_participants (
+          id INTEGER PRIMARY KEY,
           thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
           identity_id INTEGER REFERENCES identities(id) ON DELETE SET NULL,
           account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
-          role TEXT NOT NULL DEFAULT 'participant',
-          PRIMARY KEY(thread_id, account_id, role)
+          role TEXT NOT NULL DEFAULT 'participant'
         );
 
         CREATE TABLE IF NOT EXISTS messages (
@@ -109,6 +116,22 @@ def initialize_schema(db: sqlite3.Connection) -> None:
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           UNIQUE(from_kind, from_key, edge_kind, to_kind, to_key, source)
         );
+
+        CREATE INDEX IF NOT EXISTS idx_accounts_identity ON accounts(identity_id);
+        CREATE INDEX IF NOT EXISTS idx_threads_source ON threads(source_kind, source_thread_key);
+        CREATE INDEX IF NOT EXISTS idx_thread_participants_identity ON thread_participants(identity_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_participants_unique
+          ON thread_participants (
+            thread_id,
+            COALESCE(identity_id, -1),
+            COALESCE(account_id, -1),
+            role
+          );
+        CREATE INDEX IF NOT EXISTS idx_messages_thread_sent ON messages(thread_id, sent_at);
+        CREATE INDEX IF NOT EXISTS idx_messages_sender_identity ON messages(sender_identity_id);
+        CREATE INDEX IF NOT EXISTS idx_media_objects_message ON media_objects(message_id);
+        CREATE INDEX IF NOT EXISTS idx_graph_edges_from ON graph_edges(from_kind, from_key, edge_kind);
+        CREATE INDEX IF NOT EXISTS idx_graph_edges_to ON graph_edges(to_kind, to_key, edge_kind);
         """
     )
     db.commit()
