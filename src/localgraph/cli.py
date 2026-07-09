@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
+from .imessage import import_imessage_chat_db
 from .instagram import scan_instagram_source
+from .instagram import import_instagram_source
 from .paths import Workspace
 from .render import render_views
 from .schema import connect, initialize_schema
@@ -38,6 +41,23 @@ def build_parser() -> argparse.ArgumentParser:
     render = commands.add_parser("render", help="Render filesystem views from canonical SQLite state.")
     render.add_argument("--source", help="Optionally scan an Instagram source directory and include it in the render manifest.")
 
+    import_cmd = commands.add_parser("import", help="Import private source messages into canonical SQLite state.")
+    import_sources = import_cmd.add_subparsers(dest="source_kind", required=True)
+
+    import_instagram = import_sources.add_parser("instagram", help="Import Instagram transfer message JSON.")
+    import_instagram.add_argument("--source", help="Instagram source directory. Defaults to sources/instagram.")
+
+    import_imessage = import_sources.add_parser("imessage", help="Import macOS Messages chat.db.")
+    import_imessage.add_argument("--chat-db", help="Path to a readable iMessage chat.db. Defaults to ~/Library/Messages/chat.db.")
+    import_imessage.add_argument("--limit", type=int, help="Import only the newest N iMessage rows from chat.db.")
+    import_imessage.add_argument("--immutable", action="store_true", help="Open a copied chat.db as immutable read-only input.")
+
+    import_all = import_sources.add_parser("all", help="Import Instagram and iMessage sources.")
+    import_all.add_argument("--instagram-source", help="Instagram source directory. Defaults to sources/instagram.")
+    import_all.add_argument("--imessage-chat-db", help="Path to a readable iMessage chat.db. Defaults to ~/Library/Messages/chat.db.")
+    import_all.add_argument("--imessage-limit", type=int, help="Import only the newest N iMessage rows from chat.db.")
+    import_all.add_argument("--imessage-immutable", action="store_true", help="Open a copied iMessage chat.db as immutable read-only input.")
+
     view_name = commands.add_parser("view-name", help="Print a deterministic symlink-friendly view path.")
     view_name.add_argument("kind", choices=view_kinds())
     view_name.add_argument("label")
@@ -62,11 +82,13 @@ def main(argv: list[str] | None = None) -> int:
             summary = command_scan(workspace, source=args.source)
         elif args.command == "render":
             summary = command_render(workspace, source=args.source)
+        elif args.command == "import":
+            summary = command_import(workspace, args)
         elif args.command == "view-name":
             summary = command_view_name(workspace, args.kind, args.label, args.source_key)
         else:
             parser.error(f"unknown command: {args.command}")
-    except (LocalgraphError, ValueError) as exc:
+    except (LocalgraphError, OSError, sqlite3.Error, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
@@ -120,6 +142,35 @@ def command_render(workspace: Workspace, *, source: str | None = None) -> dict[s
     return result
 
 
+def command_import(workspace: Workspace, args: argparse.Namespace) -> dict[str, object]:
+    workspace.ensure_workspace()
+    with connect(workspace.database_path) as db:
+        initialize_schema(db)
+        if args.source_kind == "instagram":
+            source_path = _resolve_source(workspace, args.source, default=workspace.instagram_source_dir)
+            return import_instagram_source(db, source_path)
+        if args.source_kind == "imessage":
+            chat_db_path = Path(args.chat_db).expanduser() if args.chat_db else Path("~/Library/Messages/chat.db").expanduser()
+            return import_imessage_chat_db(db, chat_db_path, limit=args.limit, immutable=args.immutable)
+        if args.source_kind == "all":
+            instagram_source = _resolve_source(workspace, args.instagram_source, default=workspace.instagram_source_dir)
+            imessage_chat_db = Path(args.imessage_chat_db).expanduser() if args.imessage_chat_db else Path("~/Library/Messages/chat.db").expanduser()
+            results = {
+                "instagram": import_instagram_source(db, instagram_source),
+            }
+            try:
+                results["imessage"] = import_imessage_chat_db(db, imessage_chat_db, limit=args.imessage_limit, immutable=args.imessage_immutable)
+            except (OSError, sqlite3.Error) as exc:
+                results["imessage"] = {"sourceKind": "imessage", "sourcePath": str(imessage_chat_db), "error": str(exc), "messages": 0, "threads": 0}
+            return {
+                "sourceKind": "all",
+                "sources": results,
+                "messages": int(results["instagram"]["messages"]) + int(results["imessage"]["messages"]),
+                "threads": int(results["instagram"]["threads"]) + int(results["imessage"]["threads"]),
+            }
+    raise LocalgraphError(f"unsupported import source: {args.source_kind}")
+
+
 def command_view_name(workspace: Workspace, kind: str, label: str, source_key: str) -> dict[str, object]:
     path = view_path(workspace.root, kind, label, source_key)
     return {
@@ -128,6 +179,13 @@ def command_view_name(workspace: Workspace, kind: str, label: str, source_key: s
         "sourceKey": source_key,
         "path": str(path),
     }
+
+
+def _resolve_source(workspace: Workspace, source: str | None, *, default: Path) -> Path:
+    source_path = Path(source).expanduser() if source else default
+    if not source_path.is_absolute():
+        source_path = workspace.root / source_path
+    return source_path
 
 
 class LocalgraphError(Exception):

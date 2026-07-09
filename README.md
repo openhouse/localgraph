@@ -33,14 +33,17 @@ localgraph/
 The public repository contains code and design notes only. Personal messages,
 media, exports, indexes, and annotations belong on local disk.
 
-## Composite Scaffold CLI
+## CLI
 
-The scaffold uses only the Python standard library. It combines the strongest
-parts of the first scaffold family:
+Localgraph uses only the Python standard library. The current CLI initializes a
+private workspace, imports real Instagram and iMessage messages into SQLite, and
+renders rebuildable filesystem views.
 
 - a SQLite-first canonical state model;
 - an explicit private-root and filesystem-view contract;
-- body-safe Instagram transfer scanning;
+- body-safe Instagram transfer scanning before import;
+- Instagram transfer JSON import;
+- read-only iMessage `chat.db` import;
 - deterministic symlink-friendly view paths.
 
 ```bash
@@ -48,14 +51,19 @@ python -m localgraph --root ~/Localgraph plan
 python -m localgraph --root ~/Localgraph init
 python -m localgraph --root ~/Localgraph doctor
 python -m localgraph --root ~/Localgraph scan
+python -m localgraph --root ~/Localgraph import instagram --source ~/Localgraph/sources/instagram
+python -m localgraph --root ~/Localgraph import imessage --chat-db ~/Desktop/msgs-safety/now/chat.db --immutable
 python -m localgraph --root ~/Localgraph render
 python -m localgraph --root ~/Localgraph view-name person "Alice Example" "instagram:alice"
 ```
 
 `init` creates the private local workspace directories and a SQLite database.
 `scan` detects Instagram transfer exports under `sources/instagram` without
-returning message bodies. `render` builds deterministic filesystem views from
-canonical SQLite state and writes `_system/source-manifest.json`.
+returning message bodies. `import instagram` parses `message_*.json` files into
+people, groups, threads, messages, and media references. `import imessage` reads
+a Messages `chat.db` in read-only mode; use `--immutable` for copied safety
+databases. `render` builds deterministic filesystem views and thread transcripts
+from canonical SQLite state, then writes `_system/source-manifest.json`.
 
 Generated view paths pair readable labels with a short hash suffix derived from
 a source key:

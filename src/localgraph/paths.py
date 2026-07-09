@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+import os
 from pathlib import Path
 
 PRIVATE_DIRECTORY_NAMES = ("sources", "state", "objects", "views", "annotations", "exports")
@@ -63,6 +64,10 @@ class Workspace:
     def instagram_source_dir(self) -> Path:
         return self.sources_dir / "instagram"
 
+    @property
+    def imessage_source_dir(self) -> Path:
+        return self.sources_dir / "imessage"
+
     def plan(self) -> dict[str, object]:
         return {
             "root": str(self.root),
@@ -78,19 +83,28 @@ class Workspace:
         }
 
     def ensure_workspace(self, *, force: bool = False) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
+        _private_mkdir(self.root)
         visible_entries = [entry for entry in self.root.iterdir() if entry.name not in {".git", ".gitignore"}]
         if visible_entries and not force:
-            expected = {path.name for path in self.managed_directories} | {"README.md", "docs", "pyproject.toml", "src", "tests", "localgraph.config.json"}
+            expected = {path.name for path in self.managed_directories} | {
+                "README.md",
+                "docs",
+                "pyproject.toml",
+                "src",
+                "tests",
+                "localgraph.config.json",
+                "PRIVATE-DATA-README.md",
+            }
             unexpected = [entry for entry in visible_entries if entry.name not in expected]
             if unexpected:
                 names = ", ".join(sorted(entry.name for entry in unexpected))
                 raise ValueError(f"workspace has unexpected entries; pass --force to initialize anyway: {names}")
         for directory in self.managed_directories:
-            directory.mkdir(parents=True, exist_ok=True)
+            _private_mkdir(directory)
         for directory in self.view_directories:
-            directory.mkdir(parents=True, exist_ok=True)
-        self.instagram_source_dir.mkdir(parents=True, exist_ok=True)
+            _private_mkdir(directory)
+        _private_mkdir(self.instagram_source_dir)
+        _private_mkdir(self.imessage_source_dir)
         self._write_config(force=force)
         self._write_private_marker()
 
@@ -111,6 +125,7 @@ class Workspace:
             "by git.\n",
             encoding="utf-8",
         )
+        os.chmod(marker, 0o600)
 
     def _write_config(self, *, force: bool) -> None:
         if self.config_path.exists() and not force:
@@ -124,7 +139,16 @@ class Workspace:
                 "instagram": {
                     "localPath": "sources/instagram",
                     "googleDriveFolderId": None,
-                }
+                },
+                "imessage": {
+                    "chatDbPath": "~/Library/Messages/chat.db",
+                },
             },
         }
         self.config_path.write_text(f"{json.dumps(config, indent=2, sort_keys=True)}\n", encoding="utf-8")
+        os.chmod(self.config_path, 0o600)
+
+
+def _private_mkdir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path, 0o700)

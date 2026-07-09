@@ -58,11 +58,11 @@ def initialize_schema(db: sqlite3.Connection) -> None:
         );
 
         CREATE TABLE IF NOT EXISTS thread_participants (
+          id INTEGER PRIMARY KEY,
           thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
           identity_id INTEGER REFERENCES identities(id) ON DELETE SET NULL,
           account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
-          role TEXT NOT NULL DEFAULT 'participant',
-          PRIMARY KEY(thread_id, account_id, role)
+          role TEXT NOT NULL DEFAULT 'participant'
         );
 
         CREATE TABLE IF NOT EXISTS messages (
@@ -109,6 +109,19 @@ def initialize_schema(db: sqlite3.Connection) -> None:
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           UNIQUE(from_kind, from_key, edge_kind, to_kind, to_key, source)
         );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_participants_unique
+          ON thread_participants (
+            thread_id,
+            COALESCE(identity_id, -1),
+            COALESCE(account_id, -1),
+            role
+          );
+        CREATE INDEX IF NOT EXISTS idx_accounts_identity_id ON accounts(identity_id);
+        CREATE INDEX IF NOT EXISTS idx_messages_thread_sent_at ON messages(thread_id, sent_at);
+        CREATE INDEX IF NOT EXISTS idx_thread_participants_thread_id ON thread_participants(thread_id);
+        CREATE INDEX IF NOT EXISTS idx_graph_edges_from ON graph_edges(from_kind, from_key, edge_kind);
+        CREATE INDEX IF NOT EXISTS idx_graph_edges_to ON graph_edges(to_kind, to_key, edge_kind);
         """
     )
     db.commit()
