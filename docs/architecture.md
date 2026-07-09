@@ -45,3 +45,17 @@ under Meta export folders. The importer should support both:
 
 The API path is preferred for freshness because local Drive sync may lag or omit
 new transfer folders.
+
+## Filesystem View Contract
+
+Generated view paths should be stable enough to symlink into other local
+projects. Human-readable names should be paired with a short hash suffix derived
+from a source key, for example:
+
+```text
+views/people/alice-example--3a1f0d22/
+views/groups/residency-planning--a7c91f8e/
+```
+
+This keeps paths readable while avoiding collisions when two accounts or group
+chats share a display name.
