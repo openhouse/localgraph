@@ -73,19 +73,28 @@ def run_daily_import(
     workspace.ensure_workspace(force=False)
     drive_pull: dict[str, object] | None = None
     drive_pull_error: str | None = None
-    if not skip_instagram and instagram_drive_source is None:
+    resolution: DriveSourceResolution | None = None
+    if not skip_instagram:
         try:
             pull_result = pull_configured_google_drive_source(workspace)
             if pull_result is not None:
                 drive_pull = pull_result.to_json()
-                instagram_drive_source = pull_result.cache_path
+                resolution = DriveSourceResolution(
+                    pull_result.cache_path.expanduser().resolve(),
+                    "google-drive-api",
+                )
         except DriveAPIError as exc:
             drive_pull_error = str(exc)
             cache_candidate = configured_drive_cache_dir(workspace)
             if cache_candidate.exists() and int(scan_instagram_source(cache_candidate)["totalMessageFiles"]) > 0:
-                instagram_drive_source = cache_candidate
+                resolution = DriveSourceResolution(
+                    cache_candidate.expanduser().resolve(),
+                    "google-drive-cache",
+                    ["authenticated Google Drive pull failed; using the existing private cache"],
+                )
 
-    resolution = resolve_instagram_drive_source(workspace, explicit=instagram_drive_source)
+    if resolution is None:
+        resolution = resolve_instagram_drive_source(workspace, explicit=instagram_drive_source)
     if write_config_on_discovery and resolution.origin in {"explicit", "discovered"}:
         configure_google_drive_source(workspace, resolution.path)
 

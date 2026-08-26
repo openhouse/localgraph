@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "suite": "instagram-messages",
+  "description": "Deterministic acquisition and integrity gates for private Instagram message imports.",
+  "cases": [
+    {
+      "id": "test_drive.DrivePullTests.test_daily_import_prefers_configured_drive_api_when_explicit_local_source_is_empty",
+      "criterion": "A configured read-only Drive API pull overrides an explicit Drive Desktop path that has not materialized message files."
+    },
+    {
+      "id": "test_ingest.IngestTests.test_overlapping_instagram_exports_deduplicate_messages_after_repagination",
+      "criterion": "The same logical message remains one canonical row when overlapping exports change file pagination or array order."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_daily_import_uses_existing_private_cache_when_drive_pull_fails",
+      "criterion": "A previously verified private cache remains usable when the provider pull is temporarily unavailable."
+    },
+    {
+      "id": "test_ingest.IngestTests.test_import_instagram_messages_people_group_and_media",
+      "criterion": "Instagram messages, participants, groups, media references, transcripts, and person capsules render from canonical state."
+    },
+    {
+      "id": "test_cli.CliTests.test_init_accepts_repository_eval_and_script_entries",
+      "criterion": "Repository-owned eval and script entries remain compatible with Localgraph workspace validation."
+    }
+  ]
+}

@@ -124,6 +124,7 @@ def import_instagram_source(
     seen_accounts: set[str] = set()
     seen_messages: set[tuple[int, str]] = set()
     seen_media: set[str] = set()
+    message_occurrences: dict[tuple[str, str, str], int] = {}
 
     for file_path in message_files:
         export_root = detect_export_root(source, file_path)
@@ -204,8 +205,7 @@ def import_instagram_source(
             result.warnings.append(f"skipped non-list messages in {file_path}")
             continue
 
-        relative_file = file_path.relative_to(export_root).as_posix()
-        for index, message in enumerate(messages):
+        for message in messages:
             if not isinstance(message, dict):
                 continue
             sender_name = _clean_text(message.get("sender_name")) or "Unknown Instagram Sender"
@@ -238,7 +238,11 @@ def import_instagram_source(
             else:
                 sender_identity_id, sender_account_id, _ = sender_account
             timestamp_ms = _as_int(message.get("timestamp_ms"))
-            source_message_key = _instagram_message_key(relative_file, index, message)
+            fingerprint = _instagram_message_fingerprint(message)
+            occurrence_key = (export_root.as_posix(), source_thread_key, fingerprint)
+            occurrence = message_occurrences.get(occurrence_key, 0)
+            message_occurrences[occurrence_key] = occurrence + 1
+            source_message_key = _instagram_message_key(message, occurrence=occurrence, fingerprint=fingerprint)
             body_text = _instagram_message_body(message)
             message_id = _upsert_message(
                 db,
@@ -564,11 +568,20 @@ def _instagram_media_objects(
     return media
 
 
-def _instagram_message_key(relative_file: str, index: int, message: dict[str, object]) -> str:
-    timestamp = str(message.get("timestamp_ms") or "")
+def _instagram_message_fingerprint(message: dict[str, object]) -> str:
     stable_payload = json.dumps(message, ensure_ascii=False, sort_keys=True, default=str)
-    digest = hashlib.sha256(f"{relative_file}\n{index}\n{stable_payload}".encode("utf-8")).hexdigest()[:16]
-    return f"{relative_file}#{index}:{timestamp}:{digest}"
+    return hashlib.sha256(stable_payload.encode("utf-8")).hexdigest()
+
+
+def _instagram_message_key(
+    message: dict[str, object],
+    *,
+    occurrence: int,
+    fingerprint: str | None = None,
+) -> str:
+    timestamp = str(message.get("timestamp_ms") or "")
+    digest = fingerprint or _instagram_message_fingerprint(message)
+    return f"v2:{timestamp}:{digest[:24]}:{occurrence}"
 
 
 def _upsert_instagram_participant(

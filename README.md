@@ -138,7 +138,10 @@ The importer first tries the authenticated Drive API pull when a folder ID and
 token are configured. If API pull is not configured or fails, it falls back to
 explicit and configured local Drive paths, then shallow discovery under Drive
 Desktop roots such as `Shared drives/Instagram` or `My Drive/Instagram`. The
-first scheduled run imports every materialized export it can see, so the local
+authenticated pull takes precedence even when an older scheduler still passes
+an explicit Drive Desktop path; this prevents an online-only placeholder from
+bypassing a working API cache. The first scheduled run imports every
+materialized export it can see, so the local
 graph starts complete. Later scheduled runs import only the newest export
 folder by default, so the job does not repeatedly recurse through a large Drive
 archive. Pass `--all-instagram-exports` when you intentionally want an
@@ -205,3 +208,24 @@ views/people/alice-example--3a1f0d22/
 
 `notes.md` is user-authored and preserved across renders. The other files are
 generated orientation, navigation, provenance, and transcript-link material.
+
+## Instagram Evals and Hill Climb
+
+The deterministic Instagram suite covers authenticated acquisition precedence,
+private-cache fallback, overlapping-export deduplication, canonical import and
+rendering, and repository workspace compatibility. It never uses private
+message bodies as committed fixtures.
+
+```bash
+make evals
+make hill-climb
+```
+
+`make evals` emits a candidate-bound JSON receipt with the exact Git head and a
+SHA-256 digest of every non-ignored candidate file. `make hill-climb` runs that
+suite, the complete unit-test suite, and `git diff --check`.
+
+Instagram messages are keyed from their stable exported payload plus an
+occurrence ordinal within each thread/export. This keeps distinct repeated
+messages while preventing overlapping exports from duplicating a message when
+Meta moves it between split files or array positions.

@@ -13,6 +13,22 @@ from localgraph.slug import stable_view_name
 
 
 class CliTests(unittest.TestCase):
+    def test_init_accepts_repository_eval_and_script_entries(self) -> None:
+        """Catch repository-owned eval tooling making the project root fail workspace validation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "graph"
+            root.mkdir()
+            for directory in ("docs", "src", "tests", "evals", "scripts"):
+                (root / directory).mkdir()
+            for file_name in ("README.md", "pyproject.toml", "Makefile"):
+                (root / file_name).write_text("fixture\n", encoding="utf-8")
+
+            code, stdout = run_cli(["--root", str(root), "init"])
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertTrue(Path(payload["database"]).exists())
+
     def test_plan_reports_private_and_view_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "graph"

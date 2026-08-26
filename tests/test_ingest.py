@@ -104,6 +104,86 @@ class IngestTests(unittest.TestCase):
             self.assertIn("Full Transcript Links", llm_context)
             self.assertIn("Alice", llm_context)
 
+    def test_overlapping_instagram_exports_deduplicate_messages_after_repagination(self) -> None:
+        """Catch one logical message becoming two rows when a later export changes its array index."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "graph"
+            source = root / "sources" / "instagram"
+            old_thread = (
+                source
+                / "meta-old"
+                / "instagram-jamie-old"
+                / "your_instagram_activity"
+                / "messages"
+                / "inbox"
+                / "alice_123"
+            )
+            new_thread = (
+                source
+                / "meta-new"
+                / "instagram-jamie-new"
+                / "your_instagram_activity"
+                / "messages"
+                / "inbox"
+                / "alice_123"
+            )
+            old_thread.mkdir(parents=True)
+            new_thread.mkdir(parents=True)
+            shared_message = {
+                "sender_name": "Alice",
+                "timestamp_ms": 1700000000000,
+                "content": "same message across exports",
+            }
+            (old_thread / "message_1.json").write_text(
+                json.dumps(
+                    {
+                        "participants": [{"name": "Jamie"}, {"name": "Alice"}],
+                        "title": "Alice",
+                        "messages": [shared_message],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (new_thread / "message_1.json").write_text(
+                json.dumps(
+                    {
+                        "participants": [{"name": "Jamie"}, {"name": "Alice"}],
+                        "title": "Alice",
+                        "messages": [
+                            {
+                                "sender_name": "Jamie",
+                                "timestamp_ms": 1700000001000,
+                                "content": "newer message shifts the old index",
+                            },
+                            shared_message,
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, stdout = run_cli(
+                [
+                    "--root",
+                    str(root),
+                    "import",
+                    "--skip-imessage",
+                    "--me",
+                    "Jamie",
+                    "--me-instagram",
+                    "Jamie",
+                ]
+            )
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["totals"]["messages"], 2)
+            with sqlite3.connect(root / "state" / "localgraph.sqlite") as db:
+                count = db.execute(
+                    "SELECT COUNT(*) FROM messages JOIN threads ON threads.id = messages.thread_id WHERE threads.source_kind = 'instagram'"
+                ).fetchone()[0]
+            self.assertEqual(count, 2)
+
     def test_import_imessage_chat_db_direct_group_and_attachment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "graph"

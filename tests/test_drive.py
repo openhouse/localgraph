@@ -109,6 +109,49 @@ class DrivePullTests(unittest.TestCase):
             self.assertEqual(payload["result"]["totals"]["threads"], 1)
             self.assertIn("instagram-drive-cache", payload["instagram"]["importPaths"][0])
 
+    def test_daily_import_prefers_configured_drive_api_when_explicit_local_source_is_empty(self) -> None:
+        """Catch schedulers pinning an empty Drive Desktop path and bypassing the API pull."""
+        with tempfile.TemporaryDirectory() as tmp, fake_drive_api():
+            root = Path(tmp) / "graph"
+            workspace = Workspace(root)
+            workspace.ensure_workspace(force=False)
+            empty_drive_source = (
+                Path(tmp)
+                / "Library"
+                / "CloudStorage"
+                / "GoogleDrive-jamie@example.com"
+                / "Shared drives"
+                / "Instagram"
+            )
+            empty_drive_source.mkdir(parents=True)
+            write_token(workspace.state_dir / "google-drive-token.json")
+            code, _ = run_cli(["--root", str(root), "configure-drive-api", "--folder-id", "root"])
+            self.assertEqual(code, 0)
+
+            with patched_env("LOCALGRAPH_DRIVE_API_BASE_URL", FAKE_DRIVE_BASE_URL):
+                code, stdout = run_cli(
+                    [
+                        "--root",
+                        str(root),
+                        "daily-import",
+                        "--instagram-drive-source",
+                        str(empty_drive_source),
+                        "--skip-imessage",
+                        "--no-render",
+                        "--me",
+                        "Jamie",
+                        "--me-instagram",
+                        "Jamie",
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["googleDrivePull"]["status"], "pulled")
+            self.assertEqual(payload["instagram"]["origin"], "google-drive-api")
+            self.assertEqual(payload["result"]["totals"]["messages"], 1)
+            self.assertIn("instagram-drive-cache", payload["instagram"]["importPaths"][0])
+
     def test_daily_import_uses_existing_private_cache_when_drive_pull_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "graph"

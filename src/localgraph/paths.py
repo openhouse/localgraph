@@ -90,9 +90,12 @@ class Workspace:
         visible_entries = [entry for entry in self.root.iterdir() if entry.name not in {".git", ".gitignore"}]
         if visible_entries and not force:
             expected = {path.name for path in self.managed_directories} | {
+                "Makefile",
                 "README.md",
                 "docs",
+                "evals",
                 "pyproject.toml",
+                "scripts",
                 "src",
                 "tests",
                 "localgraph.config.json",
