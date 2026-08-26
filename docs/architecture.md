@@ -74,7 +74,9 @@ stable message fingerprints deduplicate overlap. A separately recorded one-time
 all-history baseline gates the status
 `historyCoverage: complete-through-latest-export`; freshness alone never implies
 historical completeness. A run-at-login and hourly macOS LaunchAgent provides a
-bounded freshness loop. The scheduled
+bounded freshness loop. A private advisory lock makes `instagram-sync` a
+single-writer operation per workspace; overlapping manual or scheduled runs
+return `skipped-concurrent` without touching the cache. The scheduled
 workspace and a private runtime snapshot live under the internal
 `~/Library/Application Support/Localgraph/` boundary because macOS background
 privacy blocks reliable LaunchAgent access to removable-volume worktrees. The same

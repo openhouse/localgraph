@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import plistlib
@@ -8,6 +10,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +37,27 @@ from .slug import stable_hash
 DEFAULT_LAUNCHD_LABEL = "com.openhouse.localgraph.daily-import"
 DEFAULT_INSTAGRAM_SYNC_LABEL = "com.openhouse.localgraph.instagram-sync"
 DEFAULT_INSTAGRAM_SYNC_INTERVAL_MINUTES = 60
+
+
+@contextlib.contextmanager
+def instagram_sync_lock(workspace: Workspace) -> Iterator[bool]:
+    lock_path = workspace.state_dir / "instagram-sync.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        lock_path.chmod(0o600)
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            handle.seek(0)
+            handle.truncate()
+            handle.write(f"{os.getpid()}\n")
+            handle.flush()
+            yield True
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 @dataclass

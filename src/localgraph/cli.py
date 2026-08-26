@@ -8,6 +8,7 @@ from pathlib import Path
 from .automation import (
     configure_google_drive_source,
     configure_instagram_baseline,
+    instagram_sync_lock,
     install_daily_import,
     install_instagram_sync,
     run_daily_import,
@@ -207,20 +208,31 @@ def main(argv: list[str] | None = None) -> int:
                 me_imessage=args.me_imessage,
             )
         elif args.command == "instagram-sync":
-            summary = command_daily_import(
-                workspace,
-                instagram_drive_source=None,
-                imessage_db=None,
-                skip_instagram=False,
-                skip_imessage=True,
-                render=not args.no_render,
-                write_config=False,
-                latest_instagram_only=True,
-                replace_instagram_snapshot=True,
-                me=args.me,
-                me_instagram=args.me_instagram,
-                me_imessage=[],
-            )
+            with instagram_sync_lock(workspace) as acquired:
+                if not acquired:
+                    summary = {
+                        "workspace": str(workspace.root),
+                        "instagramSync": {
+                            "schemaVersion": 1,
+                            "status": "skipped-concurrent",
+                            "lockPath": str(workspace.state_dir / "instagram-sync.lock"),
+                        },
+                    }
+                else:
+                    summary = command_daily_import(
+                        workspace,
+                        instagram_drive_source=None,
+                        imessage_db=None,
+                        skip_instagram=False,
+                        skip_imessage=True,
+                        render=not args.no_render,
+                        write_config=False,
+                        latest_instagram_only=True,
+                        replace_instagram_snapshot=True,
+                        me=args.me,
+                        me_instagram=args.me_instagram,
+                        me_imessage=[],
+                    )
         elif args.command == "install-daily-import":
             summary = command_install_daily_import(
                 workspace,

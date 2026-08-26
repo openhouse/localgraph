@@ -44,6 +44,10 @@
       "criterion": "The Instagram-only macOS LaunchAgent checks hourly and at login without pinning an online-only Drive Desktop path."
     },
     {
+      "id": "test_automation.AutomationTests.test_instagram_sync_command_skips_when_workspace_lock_is_held",
+      "criterion": "Manual and scheduled Instagram sync runs cannot overlap and race on the same private cache files."
+    },
+    {
       "id": "test_automation.AutomationTests.test_instagram_sync_installer_rejects_a_removable_volume_workspace",
       "criterion": "The scheduler cannot be installed against a removable-volume workspace that macOS background privacy will deny."
     },

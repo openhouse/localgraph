@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import io
 import json
 import os
@@ -10,6 +11,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import localgraph.automation as automation
 from localgraph.automation import (
     candidate_instagram_drive_sources,
     install_daily_import,
@@ -23,6 +25,36 @@ from localgraph.paths import Workspace
 
 
 class AutomationTests(unittest.TestCase):
+    def test_instagram_sync_lock_allows_only_one_workspace_writer(self) -> None:
+        """Catch manual and launchd sync runs racing on the same private cache files."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Workspace(Path(tmp) / "graph")
+            workspace.ensure_workspace(force=False)
+            lock = getattr(automation, "instagram_sync_lock", None)
+            self.assertTrue(callable(lock), "instagram_sync_lock is missing")
+
+            with lock(workspace) as first_acquired:
+                with lock(workspace) as second_acquired:
+                    self.assertTrue(first_acquired)
+                    self.assertFalse(second_acquired)
+            with lock(workspace) as acquired_after_release:
+                self.assertTrue(acquired_after_release)
+
+    def test_instagram_sync_command_skips_when_workspace_lock_is_held(self) -> None:
+        """Catch the CLI bypassing the single-writer lock used by launchd and manual runs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Workspace(Path(tmp) / "graph")
+            workspace.ensure_workspace(force=False)
+            lock_path = workspace.state_dir / "instagram-sync.lock"
+            with lock_path.open("a+", encoding="utf-8") as handle:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                code, stdout = run_cli(
+                    ["--root", str(workspace.root), "instagram-sync", "--no-render"]
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(stdout)["instagramSync"]["status"], "skipped-concurrent")
+
     def test_daily_import_reads_explicit_google_drive_source_and_records_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

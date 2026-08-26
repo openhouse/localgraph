@@ -146,9 +146,11 @@ from every completed packet and deduplicates overlapping messages instead of
 replacing history with the latest delta. User-authored `notes.md` and
 annotations are not part of that source-derived reset. A failed, interrupted,
 offline, or unauthorized pull retains the cumulative last-known-good directory
-and never publishes a partial cache folder. A retry reuses private files whose
-size and provider MD5 checksum already match, then resumes the message-only
-pull.
+and never publishes a partial cache folder. A private workspace lock prevents
+manual and scheduled `instagram-sync` runs from writing the same cache
+concurrently; a second invocation exits successfully with
+`status: skipped-concurrent`. A retry reuses private files whose size and
+provider MD5 checksum already match, then resumes the message-only pull.
 
 Freshness and historical completeness are separate. Until a one-time
 all-available-information export has completed, sync status reports
@@ -269,7 +271,8 @@ contract, bounded cumulative-export selection, explicit baseline completeness,
 atomic completed-mirror publication, cumulative source replacement, stale
 generated-view reconciliation, last-known-good fallback, hourly scheduling,
 authenticated acquisition precedence, overlapping-export deduplication,
-canonical import and rendering, and repository workspace compatibility. It
+single-writer synchronization, canonical import and rendering, and repository
+workspace compatibility. It
 never uses private message bodies as committed fixtures.
 
 ```bash
