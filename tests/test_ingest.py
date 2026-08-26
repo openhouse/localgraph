@@ -178,7 +178,7 @@ class IngestTests(unittest.TestCase):
             self.assertEqual(code, 0)
             payload = json.loads(stdout)
             self.assertEqual(payload["totals"]["messages"], 2)
-            with sqlite3.connect(root / "state" / "localgraph.sqlite") as db:
+            with contextlib.closing(sqlite3.connect(root / "state" / "localgraph.sqlite")) as db:
                 count = db.execute(
                     "SELECT COUNT(*) FROM messages JOIN threads ON threads.id = messages.thread_id WHERE threads.source_kind = 'instagram'"
                 ).fetchone()[0]

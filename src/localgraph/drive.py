@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .instagram import scan_instagram_source
 from .paths import Workspace
 
 
@@ -25,6 +26,7 @@ DRIVE_FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 DRIVE_SCOPE_READONLY = "https://www.googleapis.com/auth/drive.readonly"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+COMPLETED_EXPORTS_REGISTRY_NAME = "instagram-drive-completed-exports.json"
 
 
 @dataclass
@@ -42,6 +44,9 @@ class DrivePullResult:
     configured_folder_id: str | None = None
     selected_export_id: str | None = None
     selected_export_name: str | None = None
+    selected_export_ids: list[str] = field(default_factory=list)
+    selected_export_names: list[str] = field(default_factory=list)
+    completed_export_paths: list[Path] = field(default_factory=list)
 
     def to_json(self) -> dict[str, object]:
         result: dict[str, object] = {
@@ -63,6 +68,12 @@ class DrivePullResult:
             result["selectedExportId"] = self.selected_export_id
         if self.selected_export_name is not None:
             result["selectedExportName"] = self.selected_export_name
+        if self.selected_export_ids:
+            result["selectedExportIds"] = self.selected_export_ids
+        if self.selected_export_names:
+            result["selectedExportNames"] = self.selected_export_names
+        if self.completed_export_paths:
+            result["completedExportPaths"] = [str(path) for path in self.completed_export_paths]
         return result
 
 
@@ -203,18 +214,61 @@ def pull_latest_instagram_export(
     token = _load_token(token_source)
     access_token = _valid_access_token(token_source, token)
     base_url = api_base_url or os.environ.get("LOCALGRAPH_DRIVE_API_BASE_URL", DRIVE_API_BASE_URL)
-    selected = _select_latest_instagram_export(base_url, access_token, container_folder_id)
-    selected_cache = cache_root / selected.relative_path
-    result = pull_google_drive_folder(
-        workspace,
+    candidates = _list_instagram_exports(base_url, access_token, container_folder_id)
+    selected = candidates[-1]
+    registry_path = workspace.state_dir / COMPLETED_EXPORTS_REGISTRY_NAME
+    registry = _load_json(registry_path, default={"exports": {}})
+    if not isinstance(registry, dict):
+        registry = {"exports": {}}
+    entries = registry.get("exports")
+    if not isinstance(entries, dict):
+        entries = {}
+        registry["exports"] = entries
+
+    result = DrivePullResult(
         folder_id=selected.folder_id,
-        cache_dir=selected_cache,
-        token_path=token_source,
-        api_base_url=base_url,
+        cache_path=cache_root / selected.relative_path,
+        manifest_path=workspace.state_dir / "google-drive-pull-manifest.json",
     )
+    for candidate in candidates:
+        selected_cache = cache_root / candidate.relative_path
+        entry = entries.get(candidate.folder_id)
+        if _completed_export_entry_is_valid(cache_root, candidate, entry):
+            result.completed_export_paths.append(selected_cache.resolve())
+            continue
+        pulled = pull_google_drive_folder(
+            workspace,
+            folder_id=candidate.folder_id,
+            cache_dir=selected_cache,
+            token_path=token_source,
+            api_base_url=base_url,
+        )
+        if int(scan_instagram_source(selected_cache)["totalMessageFiles"]) <= 0:
+            raise DriveAPIError(
+                f"Drive export pull completed without Instagram message files: {candidate.name}"
+            )
+        result.files_seen += pulled.files_seen
+        result.folders_seen += pulled.folders_seen
+        result.downloaded += pulled.downloaded
+        result.unchanged += pulled.unchanged
+        result.skipped += pulled.skipped
+        result.bytes_downloaded += pulled.bytes_downloaded
+        result.warnings.extend(pulled.warnings)
+        entries[candidate.folder_id] = {
+            "folderId": candidate.folder_id,
+            "name": candidate.name,
+            "relativePath": candidate.relative_path.as_posix(),
+            "completedAt": _now_iso(),
+        }
+        registry.update({"containerFolderId": container_folder_id, "updatedAt": _now_iso()})
+        _write_json_private(registry_path, registry)
+        result.completed_export_paths.append(selected_cache.resolve())
+
     result.configured_folder_id = container_folder_id
     result.selected_export_id = selected.folder_id
     result.selected_export_name = selected.name
+    result.selected_export_ids = [candidate.folder_id for candidate in candidates]
+    result.selected_export_names = [candidate.name for candidate in candidates]
     return result
 
 
@@ -223,6 +277,14 @@ def _select_latest_instagram_export(
     access_token: str,
     container_folder_id: str,
 ) -> InstagramExportFolder:
+    return _list_instagram_exports(base_url, access_token, container_folder_id)[-1]
+
+
+def _list_instagram_exports(
+    base_url: str,
+    access_token: str,
+    container_folder_id: str,
+) -> list[InstagramExportFolder]:
     children = _list_drive_children(base_url, access_token, container_folder_id)
     candidates: list[InstagramExportFolder] = []
     for item in children:
@@ -254,7 +316,46 @@ def _select_latest_instagram_export(
         raise DriveAPIError(
             "configured Google Drive container has no direct instagram-* exports or meta-*/instagram-* exports"
         )
-    return max(candidates, key=lambda candidate: (_instagram_export_name_key(candidate.name), candidate.relative_path.as_posix()))
+    return sorted(
+        candidates,
+        key=lambda candidate: (_instagram_export_name_key(candidate.name), candidate.relative_path.as_posix()),
+    )
+
+
+def completed_instagram_export_paths(workspace: Workspace) -> list[Path]:
+    cache_root = configured_drive_cache_dir(workspace).resolve()
+    registry = _load_json(workspace.state_dir / COMPLETED_EXPORTS_REGISTRY_NAME, default={"exports": {}})
+    entries = registry.get("exports") if isinstance(registry, dict) else None
+    if not isinstance(entries, dict):
+        return []
+    completed: list[Path] = []
+    for entry in entries.values():
+        if not isinstance(entry, dict):
+            continue
+        relative = entry.get("relativePath")
+        if not isinstance(relative, str):
+            continue
+        candidate = (cache_root / relative).resolve()
+        try:
+            candidate.relative_to(cache_root)
+        except ValueError:
+            continue
+        if int(scan_instagram_source(candidate)["totalMessageFiles"]) > 0:
+            completed.append(candidate)
+    return sorted(set(completed), key=lambda path: (_instagram_export_name_key(path.name), path.as_posix()))
+
+
+def _completed_export_entry_is_valid(
+    cache_root: Path,
+    candidate: InstagramExportFolder,
+    entry: object,
+) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("relativePath") != candidate.relative_path.as_posix():
+        return False
+    export = cache_root / candidate.relative_path
+    return int(scan_instagram_source(export)["totalMessageFiles"]) > 0
 
 
 def _instagram_export_name_key(name: str) -> tuple[int, int, int]:

@@ -5,7 +5,13 @@ import json
 import sys
 from pathlib import Path
 
-from .automation import configure_google_drive_source, install_daily_import, install_instagram_sync, run_daily_import
+from .automation import (
+    configure_google_drive_source,
+    configure_instagram_baseline,
+    install_daily_import,
+    install_instagram_sync,
+    run_daily_import,
+)
 from .drive import DriveAPIError, authenticate_google_drive, configure_google_drive_api, pull_google_drive_folder
 from .ingest import import_workspace_sources
 from .instagram import scan_instagram_source
@@ -71,6 +77,16 @@ def build_parser() -> argparse.ArgumentParser:
     configure_drive_api.add_argument("--folder-id", required=True, help="Google Drive folder ID containing Meta Instagram exports.")
     configure_drive_api.add_argument("--cache-dir", help="Private local cache path. Defaults to sources/instagram-drive-cache.")
     configure_drive_api.add_argument("--token-path", help="Private OAuth token path. Defaults to state/google-drive-token.json.")
+
+    configure_baseline = commands.add_parser(
+        "configure-instagram-baseline",
+        help="Record a verified one-time all-history Instagram export as the cumulative baseline.",
+    )
+    configure_baseline.add_argument(
+        "--export-name",
+        required=True,
+        help="Exact completed instagram-* folder name created by the verified all-history export.",
+    )
 
     drive_pull = commands.add_parser("drive-pull", help="Pull a private Google Drive folder into the local Instagram cache.")
     drive_pull.add_argument("--folder-id", help="Google Drive folder ID. Defaults to configured imports.instagram.googleDriveFolderId.")
@@ -166,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
                 cache_dir=args.cache_dir,
                 token_path=args.token_path,
             )
+        elif args.command == "configure-instagram-baseline":
+            summary = configure_instagram_baseline(workspace, args.export_name)
         elif args.command == "drive-pull":
             summary = command_drive_pull(
                 workspace,

@@ -63,10 +63,10 @@ iMessage `chat.db`, normalizes people, accounts, groups, threads, messages, and
 media references into SQLite, and can immediately `--render` filesystem views.
 `drive-pull` uses a private authenticated Google Drive API token to mirror a
 configured Drive folder into `sources/instagram-drive-cache`. `instagram-sync`
-selects only the newest `instagram-*` export under a stable Drive container,
-publishes it through the stable `sources/instagram-current` directory symlink
-after the pull completes, imports it, records freshness state, and renders
-views. `daily-import` remains the combined Instagram and iMessage path.
+accumulates completed `instagram-*` packets under a stable Drive container,
+publishes their cumulative set through the stable `sources/instagram-current`
+directory symlink, imports it, records freshness and history-coverage state,
+and renders views. `daily-import` remains the combined Instagram and iMessage path.
 `render` builds deterministic
 filesystem views from canonical SQLite state and writes
 `_system/source-manifest.json`.
@@ -118,8 +118,9 @@ python -m localgraph --root "$HOME/Library/Application Support/Localgraph/worksp
 
 Configure a stable private Drive container ID from its Google Drive URL. The
 container may hold direct `instagram-*` exports or dated
-`meta-*/instagram-*` streams; Localgraph lists folder metadata and downloads
-only the newest Instagram export, never unrelated container contents:
+`meta-*/instagram-*` streams. Localgraph lists only those bounded export
+folders, downloads every not-yet-completed Instagram packet, and never walks
+unrelated container contents:
 
 ```bash
 python -m localgraph --root "$HOME/Library/Application Support/Localgraph/workspace" configure-drive-api \
@@ -136,17 +137,32 @@ python -m localgraph --root "$HOME/Library/Application Support/Localgraph/worksp
 
 This writes immutable downloaded exports under
 `sources/instagram-drive-cache/`, atomically advances
-`sources/instagram-current` only after a complete provider pull, and writes
-OAuth/token and freshness state under `state/`. These locations are ignored by
-git. `instagram-sync` treats the selected export as the authoritative current
-snapshot: stale Instagram source rows and generated transcripts from an older
-bootstrap or custody path are removed before the completed snapshot is
-rendered. User-authored `notes.md` and annotations are not part of that
-source-derived reset. A failed, interrupted, offline, or unauthorized pull
-leaves `sources/instagram-current` pointing to the last completed export rather
-than a newer partial cache folder. `state/instagram-sync-status.json` distinguishes
-`current`, `degraded`, `pending`, and local-fallback states and records the
-last successful sync time without exposing message bodies.
+`sources/instagram-current` to a cumulative directory of completed provider
+packets, and writes OAuth/token, completed-export, and freshness state under
+`state/`. These locations are ignored by git. Meta scheduled transfers are
+incremental: each packet contains information that was not in the prior
+transfer. `instagram-sync` therefore rebuilds source-derived Instagram state
+from every completed packet and deduplicates overlapping messages instead of
+replacing history with the latest delta. User-authored `notes.md` and
+annotations are not part of that source-derived reset. A failed, interrupted,
+offline, or unauthorized pull retains the cumulative last-known-good directory
+and never publishes a partial cache folder.
+
+Freshness and historical completeness are separate. Until a one-time
+all-available-information export has completed, sync status reports
+`historyCoverage: baseline-required` even when `status: current`. After
+verifying the exact completed folder produced by that one-time export, record
+it as the baseline:
+
+```bash
+python -m localgraph --root "$HOME/Library/Application Support/Localgraph/workspace" \
+  configure-instagram-baseline --export-name "instagram-ACCOUNT-YYYY-MM-DD-SUFFIX"
+```
+
+Only then does `state/instagram-sync-status.json` report
+`historyCoverage: complete-through-latest-export`. It also distinguishes
+`current`, `degraded`, `pending`, and local-fallback freshness states without
+exposing message bodies.
 
 If you also use Drive Desktop, you can still pin the local synced folder:
 
@@ -170,8 +186,8 @@ explicit and configured local Drive paths, then shallow discovery under Drive
 Desktop roots such as `Shared drives/Instagram` or `My Drive/Instagram`. The
 authenticated pull takes precedence even when an older scheduler still passes
 an explicit Drive Desktop path; this prevents an online-only placeholder from
-bypassing a working API cache. Authenticated sync imports the newest complete
-export, which is itself a full Meta message export. For local Drive fallback,
+bypassing a working API cache. Authenticated sync imports every registered
+completed export packet. For local Drive fallback,
 the first run imports every materialized export it can see and later runs use
 only the newest export by default. Pass `--all-instagram-exports` when you
 intentionally want a local archive-wide rescan. If Drive Desktop has not
@@ -247,12 +263,12 @@ generated orientation, navigation, provenance, and transcript-link material.
 ## Instagram Evals and Hill Climb
 
 The deterministic Instagram suite covers the offline PKCE and read-only OAuth
-contract, bounded newest-export selection, atomic current-mirror publication,
-authoritative snapshot replacement, stale generated-view reconciliation,
-last-known-good fallback, hourly scheduling, authenticated acquisition
-precedence, overlapping-export deduplication, canonical import and rendering,
-and repository workspace compatibility. It never uses private message bodies
-as committed fixtures.
+contract, bounded cumulative-export selection, explicit baseline completeness,
+atomic completed-mirror publication, cumulative source replacement, stale
+generated-view reconciliation, last-known-good fallback, hourly scheduling,
+authenticated acquisition precedence, overlapping-export deduplication,
+canonical import and rendering, and repository workspace compatibility. It
+never uses private message bodies as committed fixtures.
 
 ```bash
 make evals

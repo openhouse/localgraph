@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from .instagram import detect_export_root
+from .instagram import detect_export_root, instagram_message_files
 from .paths import Workspace
 from .slug import slugify, stable_hash
 
@@ -97,7 +97,7 @@ def import_workspace_sources(
 
 
 def clear_instagram_projection(db: sqlite3.Connection) -> dict[str, int]:
-    """Remove source-derived Instagram state before importing one authoritative snapshot."""
+    """Remove source-derived Instagram state before rebuilding from completed exports."""
     counts = {
         "sourceImports": int(
             db.execute("SELECT COUNT(*) FROM source_imports WHERE source_kind = 'instagram'").fetchone()[0]
@@ -535,11 +535,7 @@ def import_imessage_chat_db(
 
 
 def _instagram_message_files(source: Path) -> list[Path]:
-    return sorted(
-        path
-        for path in source.rglob("message*.json")
-        if path.is_file() and (path.name == "message.json" or re.match(r"message_\d+\.json$", path.name))
-    )
+    return instagram_message_files(source)
 
 
 def _read_instagram_json(file_path: Path) -> Any:

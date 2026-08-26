@@ -58,14 +58,20 @@ Both importers normalize into the same canonical tables:
 - `graph_edges` for derived thread, group, and participant relationships.
 
 The importers are intentionally local-first. Google Drive automation lists only
-folder metadata under a configured stable container, selects the newest direct
-`instagram-*` or nested `meta-*/instagram-*` export, and downloads only that
-private subtree into `sources/instagram-drive-cache/`. After the pull completes,
-an atomic `sources/instagram-current` symlink advances to the selected export.
-Provider, network, or partial-transfer failures retain the last completed
-pointer and mark `state/instagram-sync-status.json` degraded. The focused
-`instagram-sync` path imports and renders that pointer; a run-at-login and
-hourly macOS LaunchAgent provides a bounded freshness loop. The scheduled
+folder metadata under a configured stable container, selects every direct
+`instagram-*` or nested `meta-*/instagram-*` export not already registered as
+completed, and downloads only those private subtrees into
+`sources/instagram-drive-cache/`. After each successful pull, an atomic
+`sources/instagram-current` symlink exposes the cumulative set of completed
+provider packets. Provider, network, or partial-transfer failures retain that
+last-known-good set and mark `state/instagram-sync-status.json` degraded. Meta
+scheduled transfers are deltas, so the focused `instagram-sync` path clears the
+source-derived Instagram projection and rebuilds it from every completed packet;
+stable message fingerprints deduplicate overlap. A separately recorded one-time
+all-history baseline gates the status
+`historyCoverage: complete-through-latest-export`; freshness alone never implies
+historical completeness. A run-at-login and hourly macOS LaunchAgent provides a
+bounded freshness loop. The scheduled
 workspace and a private runtime snapshot live under the internal
 `~/Library/Application Support/Localgraph/` boundary because macOS background
 privacy blocks reliable LaunchAgent access to removable-volume worktrees. The same

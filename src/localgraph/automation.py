@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .drive import (
     DriveAPIError,
+    completed_instagram_export_paths,
     configured_drive_cache_dir,
     pull_configured_google_drive_source,
 )
@@ -27,6 +28,7 @@ from .instagram import detect_export_root, scan_instagram_source
 from .paths import Workspace
 from .render import render_views
 from .schema import connect, initialize_schema
+from .slug import stable_hash
 
 
 DEFAULT_LAUNCHD_LABEL = "com.openhouse.localgraph.daily-import"
@@ -40,6 +42,7 @@ class DriveSourceResolution:
     origin: str
     warnings: list[str] = field(default_factory=list)
     resolved_export_path: Path | None = None
+    resolved_export_paths: list[Path] = field(default_factory=list)
 
     def to_json(self) -> dict[str, object]:
         result: dict[str, object] = {
@@ -49,6 +52,8 @@ class DriveSourceResolution:
         }
         if self.resolved_export_path is not None:
             result["resolvedExportPath"] = str(self.resolved_export_path)
+        if self.resolved_export_paths:
+            result["resolvedExportPaths"] = [str(path) for path in self.resolved_export_paths]
         return result
 
 
@@ -65,6 +70,27 @@ def configure_google_drive_source(workspace: Workspace, source_path: Path) -> di
     return {
         "workspace": str(workspace.root),
         "instagramGoogleDriveSource": str(source),
+        "config": str(workspace.config_path),
+    }
+
+
+def configure_instagram_baseline(workspace: Workspace, export_name: str) -> dict[str, object]:
+    workspace.ensure_workspace(force=False)
+    completed = completed_instagram_export_paths(workspace)
+    matches = [path for path in completed if path.name == export_name]
+    if not matches:
+        raise ValueError(f"completed Instagram export is not available locally: {export_name}")
+    if len(matches) > 1:
+        raise ValueError(f"Instagram baseline export name is ambiguous: {export_name}")
+    config = load_config(workspace)
+    instagram = config.setdefault("imports", {}).setdefault("instagram", {})  # type: ignore[union-attr]
+    instagram["baselineExportName"] = export_name
+    instagram["baselineRecordedAt"] = _now_iso()
+    write_config(workspace, config)
+    return {
+        "baselineExportName": export_name,
+        "baselineExportPath": str(matches[0]),
+        "historyCoverage": "complete-through-latest-export",
         "config": str(workspace.config_path),
     }
 
@@ -95,11 +121,14 @@ def run_daily_import(
                 drive_pull = pull_result.to_json()
                 latest_export = resolve_latest_instagram_export_source(pull_result.cache_path)
                 if latest_export is not None:
-                    current = activate_instagram_current_mirror(workspace, latest_export)
+                    current = instagram_current_mirror_path(workspace)
+                    for completed_export in pull_result.completed_export_paths or [latest_export]:
+                        current = activate_instagram_current_mirror(workspace, completed_export)
                     resolution = DriveSourceResolution(
                         current,
                         "google-drive-api-current",
-                        resolved_export_path=latest_export,
+                        resolved_export_path=current.resolve(),
+                        resolved_export_paths=pull_result.completed_export_paths or [latest_export],
                     )
                 else:
                     resolution = DriveSourceResolution(
@@ -109,12 +138,14 @@ def run_daily_import(
         except DriveAPIError as exc:
             drive_pull_error = str(exc)
             current = valid_instagram_current_mirror(workspace)
+            completed_exports = completed_instagram_export_paths(workspace)
             if current is not None:
                 resolution = DriveSourceResolution(
                     current,
                     "google-drive-last-known-good",
                     ["authenticated Google Drive pull failed; using the last completed local mirror"],
                     resolved_export_path=current.resolve(),
+                    resolved_export_paths=completed_exports or [current.resolve()],
                 )
             else:
                 cache_candidate = configured_drive_cache_dir(workspace)
@@ -142,10 +173,13 @@ def run_daily_import(
             bootstrap_instagram = (not latest_instagram_only) or (
                 not replace_instagram_snapshot and not _has_instagram_imports(db)
             )
-            instagram_import_sources = resolve_instagram_import_sources(
-                resolution.path,
-                all_materialized_exports=bootstrap_instagram,
-            )
+            if resolution.resolved_export_paths:
+                instagram_import_sources = [path.resolve() for path in resolution.resolved_export_paths]
+            else:
+                instagram_import_sources = resolve_instagram_import_sources(
+                    resolution.path,
+                    all_materialized_exports=bootstrap_instagram,
+                )
             if not instagram_import_sources:
                 instagram_pending_warning = (
                     "no materialized Instagram export found under the Google Drive source; "
@@ -165,10 +199,6 @@ def run_daily_import(
                 )
             else:
                 if replace_instagram_snapshot:
-                    if len(instagram_import_sources) != 1:
-                        raise ValueError(
-                            "authoritative Instagram snapshot replacement requires exactly one materialized export"
-                        )
                     snapshot_replacement = clear_instagram_projection(db)
                 for source in instagram_import_sources:
                     imported = import_instagram_source(
@@ -305,6 +335,10 @@ def instagram_current_mirror_path(workspace: Workspace) -> Path:
     return workspace.sources_dir / "instagram-current"
 
 
+def instagram_completed_mirror_path(workspace: Workspace) -> Path:
+    return workspace.sources_dir / "instagram-completed-exports"
+
+
 def activate_instagram_current_mirror(workspace: Workspace, export_source: Path) -> Path:
     export = export_source.expanduser().resolve()
     message_files = int(scan_instagram_source(export)["totalMessageFiles"])
@@ -314,13 +348,40 @@ def activate_instagram_current_mirror(workspace: Workspace, export_source: Path)
     if current.exists() and not current.is_symlink():
         raise ValueError(f"refusing to replace a non-symlink Instagram mirror path: {current}")
     current.parent.mkdir(parents=True, exist_ok=True)
+    completed = instagram_completed_mirror_path(workspace)
+    if completed.exists() and not completed.is_dir():
+        raise ValueError(f"refusing to replace a non-directory Instagram completed mirror: {completed}")
+    completed.mkdir(parents=True, exist_ok=True)
+    if current.is_symlink() and current.exists():
+        previous = current.resolve()
+        if previous != completed.resolve() and int(scan_instagram_source(previous)["totalMessageFiles"]) > 0:
+            _publish_completed_export_link(completed, previous)
+    _publish_completed_export_link(completed, export)
     temporary = current.with_name(f".{current.name}.{os.getpid()}.tmp")
     if temporary.is_symlink() or temporary.exists():
         temporary.unlink()
-    target = Path(os.path.relpath(export, start=current.parent))
+    target = Path(os.path.relpath(completed, start=current.parent))
     temporary.symlink_to(target, target_is_directory=True)
     os.replace(temporary, current)
     return current
+
+
+def _publish_completed_export_link(completed: Path, export: Path) -> Path:
+    link = completed / export.name
+    if link.is_symlink() and link.resolve() == export:
+        return link
+    if link.exists() or link.is_symlink():
+        link = completed / f"{export.name}--{stable_hash(str(export), length=10)}"
+        if link.is_symlink() and link.resolve() == export:
+            return link
+        if link.exists() or link.is_symlink():
+            raise ValueError(f"refusing to replace an existing completed Instagram export link: {link}")
+    temporary = completed / f".{link.name}.{os.getpid()}.tmp"
+    if temporary.exists() or temporary.is_symlink():
+        temporary.unlink()
+    temporary.symlink_to(Path(os.path.relpath(export, start=completed)), target_is_directory=True)
+    os.replace(temporary, link)
+    return link
 
 
 def valid_instagram_current_mirror(workspace: Workspace) -> Path | None:
@@ -625,6 +686,13 @@ def instagram_sync_status(
     previous = load_instagram_sync_status(workspace)
     current = valid_instagram_current_mirror(workspace)
     message_files = sum(int(scan_instagram_source(source)["totalMessageFiles"]) for source in import_sources)
+    instagram_config = load_config(workspace).get("imports", {}).get("instagram", {})
+    baseline_export_name = (
+        instagram_config.get("baselineExportName") if isinstance(instagram_config, dict) else None
+    )
+    baseline_present = isinstance(baseline_export_name, str) and any(
+        source.name == baseline_export_name for source in import_sources
+    )
     if resolution.origin == "google-drive-api-current" and not pending:
         status = "current"
         last_successful_sync_at: object = checked_at
@@ -645,6 +713,9 @@ def instagram_sync_status(
         "localMirrorPath": str(current) if current is not None else None,
         "resolvedExportPath": str(current.resolve()) if current is not None else None,
         "messageFiles": message_files,
+        "completedExports": len(import_sources),
+        "historyCoverage": "complete-through-latest-export" if baseline_present else "baseline-required",
+        "baselineExportName": baseline_export_name,
         "origin": resolution.origin,
         "pullStatus": drive_pull.get("status") if drive_pull is not None else ("error" if drive_pull_error else "not-configured"),
         "lastError": drive_pull_error,

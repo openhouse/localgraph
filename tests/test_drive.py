@@ -20,6 +20,7 @@ from localgraph.drive import (
     configure_google_drive_api,
     pull_google_drive_folder,
 )
+from localgraph.instagram import scan_instagram_source
 from localgraph.paths import Workspace
 
 
@@ -259,8 +260,8 @@ class DrivePullTests(unittest.TestCase):
             self.assertEqual(Path(status["localMirrorPath"]).resolve(), current.resolve())
             self.assertEqual(status["status"], "current")
 
-    def test_current_sync_replaces_a_bootstrap_snapshot_instead_of_accumulating_it(self) -> None:
-        """Catch one export becoming duplicate history when provider custody changes its path."""
+    def test_current_sync_replaces_bootstrap_with_the_cumulative_completed_set(self) -> None:
+        """Catch bootstrap custody surviving alongside the completed provider packet set."""
         with tempfile.TemporaryDirectory() as tmp, fake_drive_api():
             root = Path(tmp) / "graph"
             workspace = Workspace(root)
@@ -314,7 +315,7 @@ class DrivePullTests(unittest.TestCase):
             self.assertEqual(payload["result"]["render"]["sourceExports"], 1)
             self.assertEqual(payload["result"]["render"]["threads"], 1)
             self.assertEqual(payload["result"]["render"]["messages"], 1)
-            with sqlite3.connect(workspace.database_path) as db:
+            with contextlib.closing(sqlite3.connect(workspace.database_path)) as db:
                 source_imports = db.execute(
                     "SELECT COUNT(*) FROM source_imports WHERE source_kind = 'instagram'"
                 ).fetchone()[0]
@@ -330,8 +331,8 @@ class DrivePullTests(unittest.TestCase):
             rendered_transcripts = list((workspace.views_dir / "threads" / "instagram").glob("*/messages.md"))
             self.assertEqual(len(rendered_transcripts), 1)
 
-    def test_configured_sync_selects_only_the_latest_export_from_a_drive_container(self) -> None:
-        """Catch a stable container configuration downloading unrelated or older Drive trees."""
+    def test_configured_sync_pulls_all_exports_without_unrelated_drive_trees(self) -> None:
+        """Catch cumulative acquisition escaping the bounded Instagram export stream."""
         with tempfile.TemporaryDirectory() as tmp, fake_drive_api(latest_container_children, latest_container_payloads):
             root = Path(tmp) / "graph"
             workspace = Workspace(root)
@@ -346,7 +347,6 @@ class DrivePullTests(unittest.TestCase):
                         "--root",
                         str(root),
                         "instagram-sync",
-                        "--no-render",
                         "--me",
                         "Jamie",
                         "--me-instagram",
@@ -357,10 +357,104 @@ class DrivePullTests(unittest.TestCase):
             self.assertEqual(code, 0)
             payload = json.loads(stdout)
             self.assertEqual(payload["googleDrivePull"]["selectedExportName"], "instagram-jamie-2026-08-25-latest")
-            self.assertEqual(payload["googleDrivePull"]["downloaded"], 1)
-            self.assertIn("instagram-jamie-2026-08-25-latest", payload["instagram"]["resolvedExportPath"])
+            self.assertEqual(
+                payload["googleDrivePull"]["selectedExportNames"],
+                ["instagram-jamie-2026-08-24-old", "instagram-jamie-2026-08-25-latest"],
+            )
+            self.assertEqual(payload["googleDrivePull"]["downloaded"], 2)
+            self.assertIn("instagram-jamie-2026-08-25-latest", payload["googleDrivePull"]["cachePath"])
+            self.assertEqual(
+                Path(payload["instagram"]["resolvedExportPath"]).resolve(),
+                (workspace.sources_dir / "instagram-completed-exports").resolve(),
+            )
             old_export = workspace.sources_dir / "instagram-drive-cache" / "meta-2026-Jul-01-00-00-00"
-            self.assertFalse(old_export.exists())
+            unrelated = workspace.sources_dir / "instagram-drive-cache" / "Unrelated private folder"
+            self.assertTrue(old_export.exists())
+            self.assertFalse(unrelated.exists())
+            self.assertEqual(payload["result"]["render"]["messages"], 2)
+
+    def test_configured_sync_accumulates_every_incremental_provider_export(self) -> None:
+        """Catch newest-only replacement discarding messages from earlier scheduled export packets."""
+        with tempfile.TemporaryDirectory() as tmp, fake_drive_api(
+            incremental_container_children,
+            incremental_container_payloads,
+        ):
+            root = Path(tmp) / "graph"
+            workspace = Workspace(root)
+            workspace.ensure_workspace(force=False)
+            write_token(workspace.state_dir / "google-drive-token.json")
+            code, _ = run_cli(["--root", str(root), "configure-drive-api", "--folder-id", "root"])
+            self.assertEqual(code, 0)
+
+            with patched_env("LOCALGRAPH_DRIVE_API_BASE_URL", FAKE_DRIVE_BASE_URL):
+                code, stdout = run_cli(
+                    [
+                        "--root",
+                        str(root),
+                        "instagram-sync",
+                        "--me",
+                        "Jamie",
+                        "--me-instagram",
+                        "Jamie",
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(
+                payload["googleDrivePull"].get("selectedExportNames"),
+                ["instagram-jamie-2026-08-24-delta", "instagram-jamie-2026-08-25-delta"],
+            )
+            self.assertEqual(payload["googleDrivePull"]["downloaded"], 2)
+            self.assertEqual(payload["result"]["render"]["sourceExports"], 2)
+            self.assertEqual(payload["result"]["render"]["threads"], 1)
+            self.assertEqual(payload["result"]["render"]["messages"], 2)
+            self.assertEqual(payload["instagramSync"]["historyCoverage"], "baseline-required")
+            current = workspace.sources_dir / "instagram-current"
+            self.assertTrue(current.is_symlink())
+            self.assertEqual(scan_instagram_source(current)["totalMessageFiles"], 2)
+
+    def test_history_coverage_requires_an_explicit_completed_baseline(self) -> None:
+        """Catch a current incremental packet being mislabeled as full Instagram history."""
+        with tempfile.TemporaryDirectory() as tmp, fake_drive_api():
+            root = Path(tmp) / "graph"
+            workspace = Workspace(root)
+            workspace.ensure_workspace(force=False)
+            write_token(workspace.state_dir / "google-drive-token.json")
+            code, _ = run_cli(["--root", str(root), "configure-drive-api", "--folder-id", "root"])
+            self.assertEqual(code, 0)
+
+            with patched_env("LOCALGRAPH_DRIVE_API_BASE_URL", FAKE_DRIVE_BASE_URL):
+                code, stdout = run_cli(
+                    ["--root", str(root), "instagram-sync", "--no-render", "--me-instagram", "Jamie"]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(stdout)["instagramSync"]["historyCoverage"], "baseline-required")
+
+            try:
+                code, stdout = run_cli(
+                    [
+                        "--root",
+                        str(root),
+                        "configure-instagram-baseline",
+                        "--export-name",
+                        "instagram-jamie-2026-07-09",
+                    ]
+                )
+            except SystemExit as exc:
+                self.fail(f"configure-instagram-baseline command is missing: {exc}")
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(stdout)["historyCoverage"], "complete-through-latest-export")
+
+            with patched_env("LOCALGRAPH_DRIVE_API_BASE_URL", FAKE_DRIVE_BASE_URL):
+                code, stdout = run_cli(
+                    ["--root", str(root), "instagram-sync", "--no-render", "--me-instagram", "Jamie"]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                json.loads(stdout)["instagramSync"]["historyCoverage"],
+                "complete-through-latest-export",
+            )
 
     def test_failed_drive_pull_keeps_the_last_known_good_current_mirror(self) -> None:
         """Catch a partial newer cache folder replacing the last completed provider snapshot."""
@@ -508,6 +602,8 @@ def fake_children() -> dict[str, list[dict[str, object]]]:
 
 
 def latest_container_children() -> dict[str, list[dict[str, object]]]:
+    old_payload = incremental_message_payload("older export packet", 1_700_000_000_000)
+    latest_payload = incremental_message_payload("latest export packet", 1_700_086_400_000)
     return {
         "root": [
             folder("folder-unrelated", "Unrelated private folder"),
@@ -516,6 +612,21 @@ def latest_container_children() -> dict[str, list[dict[str, object]]]:
         ],
         "folder-meta-old": [folder("folder-export-old", "instagram-jamie-2026-08-24-old")],
         "folder-meta-new": [folder("folder-export-latest", "instagram-jamie-2026-08-25-latest")],
+        "folder-export-old": [folder("folder-activity-old", "your_instagram_activity")],
+        "folder-activity-old": [folder("folder-messages-old", "messages")],
+        "folder-messages-old": [folder("folder-inbox-old", "inbox")],
+        "folder-inbox-old": [folder("folder-thread-old", "alice_123")],
+        "folder-thread-old": [
+            {
+                "id": "file-old",
+                "name": "message_1.json",
+                "mimeType": "application/json",
+                "modifiedTime": "2026-08-24T19:04:43.973Z",
+                "size": str(len(old_payload)),
+                "md5Checksum": "old-fixture-md5",
+                "capabilities": {"canDownload": True},
+            }
+        ],
         "folder-export-latest": [folder("folder-activity-latest", "your_instagram_activity")],
         "folder-activity-latest": [folder("folder-messages-latest", "messages")],
         "folder-messages-latest": [folder("folder-inbox-latest", "inbox")],
@@ -526,7 +637,7 @@ def latest_container_children() -> dict[str, list[dict[str, object]]]:
                 "name": "message_1.json",
                 "mimeType": "application/json",
                 "modifiedTime": "2026-08-25T19:04:43.973Z",
-                "size": str(len(message_payload())),
+                "size": str(len(latest_payload)),
                 "md5Checksum": "latest-fixture-md5",
                 "capabilities": {"canDownload": True},
             }
@@ -535,7 +646,75 @@ def latest_container_children() -> dict[str, list[dict[str, object]]]:
 
 
 def latest_container_payloads() -> dict[str, bytes]:
-    return {"file-latest": message_payload()}
+    return {
+        "file-old": incremental_message_payload("older export packet", 1_700_000_000_000),
+        "file-latest": incremental_message_payload("latest export packet", 1_700_086_400_000),
+    }
+
+
+def incremental_container_children() -> dict[str, list[dict[str, object]]]:
+    first_payload = incremental_message_payload("first scheduled packet", 1_700_000_000_000)
+    second_payload = incremental_message_payload("second scheduled packet", 1_700_086_400_000)
+    return {
+        "root": [folder("folder-meta", "meta-2026-Aug-26-00-00-00")],
+        "folder-meta": [
+            folder("folder-export-first", "instagram-jamie-2026-08-24-delta"),
+            folder("folder-export-second", "instagram-jamie-2026-08-25-delta"),
+        ],
+        "folder-export-first": [folder("folder-activity-first", "your_instagram_activity")],
+        "folder-activity-first": [folder("folder-messages-first", "messages")],
+        "folder-messages-first": [folder("folder-inbox-first", "inbox")],
+        "folder-inbox-first": [folder("folder-thread-first", "alice_123")],
+        "folder-thread-first": [
+            {
+                "id": "file-first",
+                "name": "message_1.json",
+                "mimeType": "application/json",
+                "modifiedTime": "2026-08-24T12:00:00.000Z",
+                "size": str(len(first_payload)),
+                "md5Checksum": "first-fixture-md5",
+                "capabilities": {"canDownload": True},
+            }
+        ],
+        "folder-export-second": [folder("folder-activity-second", "your_instagram_activity")],
+        "folder-activity-second": [folder("folder-messages-second", "messages")],
+        "folder-messages-second": [folder("folder-inbox-second", "inbox")],
+        "folder-inbox-second": [folder("folder-thread-second", "alice_123")],
+        "folder-thread-second": [
+            {
+                "id": "file-second",
+                "name": "message_1.json",
+                "mimeType": "application/json",
+                "modifiedTime": "2026-08-25T12:00:00.000Z",
+                "size": str(len(second_payload)),
+                "md5Checksum": "second-fixture-md5",
+                "capabilities": {"canDownload": True},
+            }
+        ],
+    }
+
+
+def incremental_container_payloads() -> dict[str, bytes]:
+    return {
+        "file-first": incremental_message_payload("first scheduled packet", 1_700_000_000_000),
+        "file-second": incremental_message_payload("second scheduled packet", 1_700_086_400_000),
+    }
+
+
+def incremental_message_payload(content: str, timestamp_ms: int) -> bytes:
+    return json.dumps(
+        {
+            "participants": [{"name": "Jamie"}, {"name": "Alice"}],
+            "title": "Alice",
+            "messages": [
+                {
+                    "sender_name": "Alice",
+                    "timestamp_ms": timestamp_ms,
+                    "content": content,
+                }
+            ],
+        }
+    ).encode("utf-8")
 
 
 def write_token(path: Path) -> None:

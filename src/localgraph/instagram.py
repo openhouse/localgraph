@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -30,7 +32,7 @@ def scan_instagram_source(source_path: Path) -> dict[str, object]:
     if not source.exists():
         return {"sourceKind": "instagram", "sourcePath": str(source), "exports": [], "totalMessageFiles": 0}
 
-    message_files = sorted(path for path in source.rglob("message_*.json") if path.is_file())
+    message_files = instagram_message_files(source)
     for file_path in message_files:
         export_root = detect_export_root(source, file_path)
         relative_file = file_path.relative_to(export_root).as_posix()
@@ -55,6 +57,33 @@ def scan_instagram_source(source_path: Path) -> dict[str, object]:
         "exports": [item.to_json() for _, item in sorted(exports.items(), key=lambda pair: pair[1].relative_path)],
         "totalMessageFiles": len(message_files),
     }
+
+
+def instagram_message_files(source_path: Path) -> list[Path]:
+    """List Instagram message JSON while following only acyclic directory symlinks."""
+    source = source_path.expanduser().resolve()
+    if not source.exists():
+        return []
+    seen_directories: set[Path] = set()
+    message_files: list[Path] = []
+    for root, directory_names, file_names in os.walk(source, followlinks=True):
+        root_path = Path(root)
+        resolved_root = root_path.resolve()
+        if resolved_root in seen_directories:
+            directory_names[:] = []
+            continue
+        seen_directories.add(resolved_root)
+        directory_names[:] = [
+            name
+            for name in directory_names
+            if (root_path / name).resolve() not in seen_directories
+        ]
+        for name in file_names:
+            if name == "message.json" or re.fullmatch(r"message_\d+\.json", name):
+                candidate = root_path / name
+                if candidate.is_file():
+                    message_files.append(candidate)
+    return sorted(message_files)
 
 
 def detect_export_root(source_path: Path, file_path: Path) -> Path:
