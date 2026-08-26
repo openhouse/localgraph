@@ -138,9 +138,13 @@ This writes immutable downloaded exports under
 `sources/instagram-drive-cache/`, atomically advances
 `sources/instagram-current` only after a complete provider pull, and writes
 OAuth/token and freshness state under `state/`. These locations are ignored by
-git. A failed, interrupted, offline, or unauthorized pull leaves
-`sources/instagram-current` pointing to the last completed export rather than a
-newer partial cache folder. `state/instagram-sync-status.json` distinguishes
+git. `instagram-sync` treats the selected export as the authoritative current
+snapshot: stale Instagram source rows and generated transcripts from an older
+bootstrap or custody path are removed before the completed snapshot is
+rendered. User-authored `notes.md` and annotations are not part of that
+source-derived reset. A failed, interrupted, offline, or unauthorized pull
+leaves `sources/instagram-current` pointing to the last completed export rather
+than a newer partial cache folder. `state/instagram-sync-status.json` distinguishes
 `current`, `degraded`, `pending`, and local-fallback states and records the
 last successful sync time without exposing message bodies.
 
@@ -242,11 +246,13 @@ generated orientation, navigation, provenance, and transcript-link material.
 
 ## Instagram Evals and Hill Climb
 
-The deterministic Instagram suite covers bounded newest-export selection,
-atomic current-mirror publication, last-known-good fallback, hourly scheduling,
-authenticated acquisition precedence, overlapping-export deduplication,
-canonical import and rendering, and repository workspace compatibility. It
-never uses private message bodies as committed fixtures.
+The deterministic Instagram suite covers the offline PKCE and read-only OAuth
+contract, bounded newest-export selection, atomic current-mirror publication,
+authoritative snapshot replacement, stale generated-view reconciliation,
+last-known-good fallback, hourly scheduling, authenticated acquisition
+precedence, overlapping-export deduplication, canonical import and rendering,
+and repository workspace compatibility. It never uses private message bodies
+as committed fixtures.
 
 ```bash
 make evals

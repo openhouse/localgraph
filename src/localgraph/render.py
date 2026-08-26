@@ -26,6 +26,33 @@ def render_views(db: sqlite3.Connection, workspace: Workspace, *, source_scan: d
     )
     message_count = int(db.execute("SELECT COUNT(*) AS count FROM messages").fetchone()["count"])
 
+    _prune_stale_entity_views(
+        workspace.views_dir / "people",
+        {stable_view_name(row["display_name"], row["stable_key"]) for row in people},
+        generated_files={
+            "index.md",
+            "llm-context.md",
+            "threads.md",
+            "groups.md",
+            "timeline.md",
+            "media.md",
+            "source-accounts.md",
+        },
+        generated_directories={"manifests", "transcripts"},
+    )
+    _prune_stale_entity_views(
+        workspace.views_dir / "groups",
+        {stable_view_name(row["display_name"], row["stable_key"]) for row in groups},
+        generated_files={"index.md"},
+    )
+    _prune_stale_thread_views(
+        workspace.views_dir / "threads",
+        {
+            Path(str(row["source_kind"])) / stable_view_name(row["title"], row["source_thread_key"])
+            for row in threads
+        },
+    )
+
     _write_index(workspace.views_dir / "index.md", people=people, groups=groups, threads=threads)
     for row in people:
         _write_entity_view(
@@ -318,6 +345,70 @@ def _reset_generated_dir(path: Path) -> None:
         else:
             shutil.rmtree(path)
     path.mkdir(parents=True, exist_ok=True)
+
+
+def _prune_stale_entity_views(
+    root: Path,
+    active_names: set[str],
+    *,
+    generated_files: set[str],
+    generated_directories: set[str] | None = None,
+) -> None:
+    if not root.is_dir():
+        return
+    for path in root.iterdir():
+        if not path.is_dir() or path.is_symlink() or path.name in active_names:
+            continue
+        _remove_managed_view_artifacts(
+            path,
+            generated_files=generated_files,
+            generated_directories=generated_directories or set(),
+        )
+
+
+def _prune_stale_thread_views(root: Path, active_paths: set[Path]) -> None:
+    if not root.is_dir():
+        return
+    for source_dir in root.iterdir():
+        if not source_dir.is_dir() or source_dir.is_symlink():
+            continue
+        for path in source_dir.iterdir():
+            if not path.is_dir() or path.is_symlink():
+                continue
+            if Path(source_dir.name) / path.name in active_paths:
+                continue
+            _remove_managed_view_artifacts(
+                path,
+                generated_files={"index.md", "messages.md"},
+                generated_directories=set(),
+            )
+        _remove_empty_directory(source_dir)
+
+
+def _remove_managed_view_artifacts(
+    path: Path,
+    *,
+    generated_files: set[str],
+    generated_directories: set[str],
+) -> None:
+    for name in generated_files:
+        target = path / name
+        if target.is_file() or target.is_symlink():
+            target.unlink()
+    for name in generated_directories:
+        target = path / name
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        elif target.is_dir():
+            shutil.rmtree(target)
+    _remove_empty_directory(path)
+
+
+def _remove_empty_directory(path: Path) -> None:
+    try:
+        path.rmdir()
+    except OSError:
+        pass
 
 
 def _replace_symlink(link_path: Path, target_path: Path) -> None:

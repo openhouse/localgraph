@@ -96,6 +96,44 @@ def import_workspace_sources(
     }
 
 
+def clear_instagram_projection(db: sqlite3.Connection) -> dict[str, int]:
+    """Remove source-derived Instagram state before importing one authoritative snapshot."""
+    counts = {
+        "sourceImports": int(
+            db.execute("SELECT COUNT(*) FROM source_imports WHERE source_kind = 'instagram'").fetchone()[0]
+        ),
+        "threads": int(db.execute("SELECT COUNT(*) FROM threads WHERE source_kind = 'instagram'").fetchone()[0]),
+        "messages": int(
+            db.execute(
+                "SELECT COUNT(*) FROM messages JOIN threads ON threads.id = messages.thread_id "
+                "WHERE threads.source_kind = 'instagram'"
+            ).fetchone()[0]
+        ),
+        "media": int(
+            db.execute(
+                "SELECT COUNT(*) FROM media_objects JOIN messages ON messages.id = media_objects.message_id "
+                "JOIN threads ON threads.id = messages.thread_id WHERE threads.source_kind = 'instagram'"
+            ).fetchone()[0]
+        ),
+        "accounts": int(db.execute("SELECT COUNT(*) FROM accounts WHERE source_kind = 'instagram'").fetchone()[0]),
+        "identities": int(
+            db.execute(
+                "SELECT COUNT(*) FROM identities WHERE stable_key GLOB 'person:instagram:*' "
+                "OR stable_key GLOB 'group:instagram:*'"
+            ).fetchone()[0]
+        ),
+    }
+    db.execute("DELETE FROM graph_edges WHERE source = 'instagram-import'")
+    db.execute("DELETE FROM source_imports WHERE source_kind = 'instagram'")
+    db.execute("DELETE FROM threads WHERE source_kind = 'instagram'")
+    db.execute("DELETE FROM accounts WHERE source_kind = 'instagram'")
+    db.execute(
+        "DELETE FROM identities WHERE stable_key GLOB 'person:instagram:*' "
+        "OR stable_key GLOB 'group:instagram:*'"
+    )
+    return counts
+
+
 def import_instagram_source(
     db: sqlite3.Connection,
     source_path: Path,

@@ -183,6 +183,7 @@ def main(argv: list[str] | None = None) -> int:
                 render=not args.no_render,
                 write_config=args.write_config,
                 latest_instagram_only=not args.all_instagram_exports,
+                replace_instagram_snapshot=False,
                 me=args.me,
                 me_instagram=args.me_instagram,
                 me_imessage=args.me_imessage,
@@ -197,6 +198,7 @@ def main(argv: list[str] | None = None) -> int:
                 render=not args.no_render,
                 write_config=False,
                 latest_instagram_only=True,
+                replace_instagram_snapshot=True,
                 me=args.me,
                 me_instagram=args.me_instagram,
                 me_imessage=[],
@@ -379,6 +381,7 @@ def command_daily_import(
     render: bool,
     write_config: bool,
     latest_instagram_only: bool,
+    replace_instagram_snapshot: bool,
     me: str,
     me_instagram: list[str],
     me_imessage: list[str],
@@ -395,6 +398,7 @@ def command_daily_import(
         render=render,
         write_config_on_discovery=write_config,
         latest_instagram_only=latest_instagram_only,
+        replace_instagram_snapshot=replace_instagram_snapshot,
     )
 
 

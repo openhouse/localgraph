@@ -5,6 +5,7 @@ import io
 import json
 import os
 import re
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -13,7 +14,12 @@ from pathlib import Path
 from unittest import mock
 
 from localgraph.cli import main
-from localgraph.drive import configure_google_drive_api, pull_google_drive_folder
+from localgraph.drive import (
+    DRIVE_SCOPE_READONLY,
+    _authorization_url,
+    configure_google_drive_api,
+    pull_google_drive_folder,
+)
 from localgraph.paths import Workspace
 
 
@@ -43,6 +49,28 @@ def message_payload() -> bytes:
 
 
 class DrivePullTests(unittest.TestCase):
+    def test_oauth_authorization_contract_is_offline_pkce_and_drive_readonly(self) -> None:
+        """Catch unattended refresh disappearing or Drive permissions widening."""
+        url = _authorization_url(
+            {
+                "client_id": "localgraph-client-id",
+                "auth_uri": "https://accounts.example/authorize",
+            },
+            redirect_uri="http://127.0.0.1:43123/oauth2callback",
+            state="state-value",
+            challenge="pkce-challenge",
+        )
+
+        parsed = urllib.parse.urlparse(url)
+        params = urllib.parse.parse_qs(parsed.query)
+        self.assertEqual(params["access_type"], ["offline"])
+        self.assertEqual(params["prompt"], ["consent"])
+        self.assertEqual(params["scope"], [DRIVE_SCOPE_READONLY])
+        self.assertEqual(params["code_challenge_method"], ["S256"])
+        self.assertEqual(params["code_challenge"], ["pkce-challenge"])
+        self.assertEqual(params["redirect_uri"], ["http://127.0.0.1:43123/oauth2callback"])
+        self.assertEqual(params["state"], ["state-value"])
+
     def test_configure_drive_api_records_private_cache_and_token_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Workspace(Path(tmp) / "graph")
@@ -230,6 +258,77 @@ class DrivePullTests(unittest.TestCase):
             status = json.loads((workspace.state_dir / "instagram-sync-status.json").read_text(encoding="utf-8"))
             self.assertEqual(Path(status["localMirrorPath"]).resolve(), current.resolve())
             self.assertEqual(status["status"], "current")
+
+    def test_current_sync_replaces_a_bootstrap_snapshot_instead_of_accumulating_it(self) -> None:
+        """Catch one export becoming duplicate history when provider custody changes its path."""
+        with tempfile.TemporaryDirectory() as tmp, fake_drive_api():
+            root = Path(tmp) / "graph"
+            workspace = Workspace(root)
+            workspace.ensure_workspace(force=False)
+            bootstrap_export = workspace.sources_dir / "instagram-bootstrap" / "instagram-jamie-2026-07-09"
+            bootstrap_message = (
+                bootstrap_export
+                / "your_instagram_activity"
+                / "messages"
+                / "inbox"
+                / "drive-thread"
+                / "message_1.json"
+            )
+            bootstrap_message.parent.mkdir(parents=True)
+            bootstrap_message.write_bytes(message_payload())
+            code, _ = run_cli(
+                [
+                    "--root",
+                    str(root),
+                    "import",
+                    "--instagram-source",
+                    str(bootstrap_export),
+                    "--skip-imessage",
+                    "--me",
+                    "Jamie",
+                    "--me-instagram",
+                    "Jamie",
+                    "--render",
+                ]
+            )
+            self.assertEqual(code, 0)
+
+            write_token(workspace.state_dir / "google-drive-token.json")
+            code, _ = run_cli(["--root", str(root), "configure-drive-api", "--folder-id", "root"])
+            self.assertEqual(code, 0)
+            with patched_env("LOCALGRAPH_DRIVE_API_BASE_URL", FAKE_DRIVE_BASE_URL):
+                code, stdout = run_cli(
+                    [
+                        "--root",
+                        str(root),
+                        "instagram-sync",
+                        "--me",
+                        "Jamie",
+                        "--me-instagram",
+                        "Jamie",
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["result"]["render"]["sourceExports"], 1)
+            self.assertEqual(payload["result"]["render"]["threads"], 1)
+            self.assertEqual(payload["result"]["render"]["messages"], 1)
+            with sqlite3.connect(workspace.database_path) as db:
+                source_imports = db.execute(
+                    "SELECT COUNT(*) FROM source_imports WHERE source_kind = 'instagram'"
+                ).fetchone()[0]
+                thread_keys = db.execute(
+                    "SELECT source_thread_key FROM threads WHERE source_kind = 'instagram' ORDER BY source_thread_key"
+                ).fetchall()
+                messages = db.execute(
+                    "SELECT COUNT(*) FROM messages JOIN threads ON threads.id = messages.thread_id WHERE threads.source_kind = 'instagram'"
+                ).fetchone()[0]
+            self.assertEqual(source_imports, 1)
+            self.assertEqual(thread_keys, [("messages/inbox/alice_123",)])
+            self.assertEqual(messages, 1)
+            rendered_transcripts = list((workspace.views_dir / "threads" / "instagram").glob("*/messages.md"))
+            self.assertEqual(len(rendered_transcripts), 1)
 
     def test_configured_sync_selects_only_the_latest_export_from_a_drive_container(self) -> None:
         """Catch a stable container configuration downloading unrelated or older Drive trees."""

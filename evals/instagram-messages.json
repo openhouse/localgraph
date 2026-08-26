@@ -4,6 +4,10 @@
   "description": "Deterministic acquisition and integrity gates for private Instagram message imports.",
   "cases": [
     {
+      "id": "test_drive.DrivePullTests.test_oauth_authorization_contract_is_offline_pkce_and_drive_readonly",
+      "criterion": "Google authorization remains refreshable for unattended checks, protected by PKCE and state, and limited to the read-only Drive scope."
+    },
+    {
       "id": "test_drive.DrivePullTests.test_daily_import_prefers_configured_drive_api_when_explicit_local_source_is_empty",
       "criterion": "A configured read-only Drive API pull overrides an explicit Drive Desktop path that has not materialized message files."
     },
@@ -14,6 +18,10 @@
     {
       "id": "test_drive.DrivePullTests.test_successful_drive_pull_advances_the_current_instagram_mirror",
       "criterion": "A completed authenticated pull atomically advances the stable local Instagram mirror and records observable freshness state."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_current_sync_replaces_a_bootstrap_snapshot_instead_of_accumulating_it",
+      "criterion": "The authoritative current export replaces stale bootstrap custody rows so one logical snapshot cannot render as duplicate sources, threads, or messages."
     },
     {
       "id": "test_drive.DrivePullTests.test_failed_drive_pull_keeps_the_last_known_good_current_mirror",

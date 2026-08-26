@@ -17,7 +17,12 @@ from .drive import (
     configured_drive_cache_dir,
     pull_configured_google_drive_source,
 )
-from .ingest import SourceImportResult, import_imessage_chat_db, import_instagram_source
+from .ingest import (
+    SourceImportResult,
+    clear_instagram_projection,
+    import_imessage_chat_db,
+    import_instagram_source,
+)
 from .instagram import detect_export_root, scan_instagram_source
 from .paths import Workspace
 from .render import render_views
@@ -77,6 +82,7 @@ def run_daily_import(
     render: bool = True,
     write_config_on_discovery: bool = False,
     latest_instagram_only: bool = True,
+    replace_instagram_snapshot: bool = False,
 ) -> dict[str, object]:
     workspace.ensure_workspace(force=False)
     drive_pull: dict[str, object] | None = None
@@ -126,13 +132,16 @@ def run_daily_import(
 
     instagram_import_sources: list[Path] = []
     instagram_pending_warning: str | None = None
+    snapshot_replacement: dict[str, int] | None = None
 
     imessage_path = imessage_db.expanduser().resolve() if imessage_db else workspace.imessage_chat_db_path
     with connect(workspace.database_path) as db:
         initialize_schema(db)
         bootstrap_instagram = False
         if not skip_instagram:
-            bootstrap_instagram = (not latest_instagram_only) or (not _has_instagram_imports(db))
+            bootstrap_instagram = (not latest_instagram_only) or (
+                not replace_instagram_snapshot and not _has_instagram_imports(db)
+            )
             instagram_import_sources = resolve_instagram_import_sources(
                 resolution.path,
                 all_materialized_exports=bootstrap_instagram,
@@ -155,16 +164,23 @@ def run_daily_import(
                     )
                 )
             else:
-                for source in instagram_import_sources:
-                    source_results.append(
-                        import_instagram_source(
-                            db,
-                            source,
-                            me_name=me_name,
-                            me_names=me_instagram_names or [],
-                            explicit=instagram_drive_source is not None,
+                if replace_instagram_snapshot:
+                    if len(instagram_import_sources) != 1:
+                        raise ValueError(
+                            "authoritative Instagram snapshot replacement requires exactly one materialized export"
                         )
+                    snapshot_replacement = clear_instagram_projection(db)
+                for source in instagram_import_sources:
+                    imported = import_instagram_source(
+                        db,
+                        source,
+                        me_name=me_name,
+                        me_names=me_instagram_names or [],
+                        explicit=instagram_drive_source is not None,
                     )
+                    if replace_instagram_snapshot and (imported.status != "imported" or imported.messages <= 0):
+                        raise ValueError("refusing to replace Instagram projection with an empty snapshot")
+                    source_results.append(imported)
         if not skip_imessage:
             source_results.append(
                 import_imessage_chat_db(
@@ -199,6 +215,7 @@ def run_daily_import(
             "importPath": str(instagram_import_sources[0]) if len(instagram_import_sources) == 1 else None,
             "importPaths": [str(source) for source in instagram_import_sources],
             "latestOnly": latest_instagram_only,
+            "snapshotReplacement": snapshot_replacement,
         },
         "googleDrivePull": drive_pull or {
             "status": "error" if drive_pull_error else "not-configured",
