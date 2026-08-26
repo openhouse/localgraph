@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -17,6 +18,7 @@ from localgraph.cli import main
 from localgraph.drive import (
     DRIVE_SCOPE_READONLY,
     _authorization_url,
+    _is_unchanged,
     configure_google_drive_api,
     pull_google_drive_folder,
 )
@@ -50,6 +52,19 @@ def message_payload() -> bytes:
 
 
 class DrivePullTests(unittest.TestCase):
+    def test_interrupted_pull_reuses_a_checksum_verified_private_file(self) -> None:
+        """Catch a safe restart redownloading files that already completed before interruption."""
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "message_1.json"
+            payload = message_payload()
+            target.write_bytes(payload)
+            item = {
+                "size": str(len(payload)),
+                "md5Checksum": hashlib.md5(payload).hexdigest(),  # noqa: S324 - provider integrity metadata
+            }
+
+            self.assertTrue(_is_unchanged(target, item, {}))
+
     def test_oauth_authorization_contract_is_offline_pkce_and_drive_readonly(self) -> None:
         """Catch unattended refresh disappearing or Drive permissions widening."""
         url = _authorization_url(
@@ -372,6 +387,40 @@ class DrivePullTests(unittest.TestCase):
             self.assertTrue(old_export.exists())
             self.assertFalse(unrelated.exists())
             self.assertEqual(payload["result"]["render"]["messages"], 2)
+
+    def test_configured_sync_downloads_only_instagram_message_subtrees(self) -> None:
+        """Catch message mirroring broadening into unrelated account-export sections."""
+        with tempfile.TemporaryDirectory() as tmp, fake_drive_api(
+            message_scoped_container_children,
+            message_scoped_container_payloads,
+        ):
+            root = Path(tmp) / "graph"
+            workspace = Workspace(root)
+            workspace.ensure_workspace(force=False)
+            write_token(workspace.state_dir / "google-drive-token.json")
+            code, _ = run_cli(["--root", str(root), "configure-drive-api", "--folder-id", "root"])
+            self.assertEqual(code, 0)
+
+            with patched_env("LOCALGRAPH_DRIVE_API_BASE_URL", FAKE_DRIVE_BASE_URL):
+                code, stdout = run_cli(
+                    ["--root", str(root), "instagram-sync", "--no-render", "--me-instagram", "Jamie"]
+                )
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["googleDrivePull"]["downloaded"], 1)
+            selected_cache = Path(payload["googleDrivePull"]["cachePath"])
+            self.assertTrue(
+                (
+                    selected_cache
+                    / "your_instagram_activity"
+                    / "messages"
+                    / "inbox"
+                    / "alice_123"
+                    / "message_1.json"
+                ).exists()
+            )
+            self.assertFalse((selected_cache / "your_instagram_activity" / "posts").exists())
 
     def test_configured_sync_accumulates_every_incremental_provider_export(self) -> None:
         """Catch newest-only replacement discarding messages from earlier scheduled export packets."""
@@ -715,6 +764,51 @@ def incremental_message_payload(content: str, timestamp_ms: int) -> bytes:
             ],
         }
     ).encode("utf-8")
+
+
+def message_scoped_container_children() -> dict[str, list[dict[str, object]]]:
+    payload = message_payload()
+    unrelated = b'{"unrelated":"account export data"}'
+    return {
+        "root": [folder("folder-meta", "meta-2026-Aug-26-00-00-00")],
+        "folder-meta": [folder("folder-export", "instagram-jamie-2026-08-26-scoped")],
+        "folder-export": [folder("folder-activity", "your_instagram_activity")],
+        "folder-activity": [
+            folder("folder-messages", "messages"),
+            folder("folder-posts", "posts"),
+        ],
+        "folder-messages": [folder("folder-inbox", "inbox")],
+        "folder-inbox": [folder("folder-thread", "alice_123")],
+        "folder-thread": [
+            {
+                "id": "file-message",
+                "name": "message_1.json",
+                "mimeType": "application/json",
+                "modifiedTime": "2026-08-26T12:00:00.000Z",
+                "size": str(len(payload)),
+                "md5Checksum": "message-fixture-md5",
+                "capabilities": {"canDownload": True},
+            }
+        ],
+        "folder-posts": [
+            {
+                "id": "file-unrelated",
+                "name": "posts.json",
+                "mimeType": "application/json",
+                "modifiedTime": "2026-08-26T12:00:00.000Z",
+                "size": str(len(unrelated)),
+                "md5Checksum": "unrelated-fixture-md5",
+                "capabilities": {"canDownload": True},
+            }
+        ],
+    }
+
+
+def message_scoped_container_payloads() -> dict[str, bytes]:
+    return {
+        "file-message": message_payload(),
+        "file-unrelated": b'{"unrelated":"account export data"}',
+    }
 
 
 def write_token(path: Path) -> None:

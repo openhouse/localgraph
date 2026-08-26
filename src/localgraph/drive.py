@@ -242,6 +242,10 @@ def pull_latest_instagram_export(
             cache_dir=selected_cache,
             token_path=token_source,
             api_base_url=base_url,
+            allowed_relative_roots=(
+                Path("your_instagram_activity/messages"),
+                Path("messages"),
+            ),
         )
         if int(scan_instagram_source(selected_cache)["totalMessageFiles"]) <= 0:
             raise DriveAPIError(
@@ -372,6 +376,7 @@ def pull_google_drive_folder(
     cache_dir: Path | None = None,
     token_path: Path | None = None,
     api_base_url: str | None = None,
+    allowed_relative_roots: tuple[Path, ...] | None = None,
 ) -> DrivePullResult:
     workspace.ensure_workspace(force=False)
     cache_root = cache_dir or configured_drive_cache_dir(workspace)
@@ -393,9 +398,21 @@ def pull_google_drive_folder(
         for item in children:
             name = str(item.get("name") or item.get("id") or "unnamed")
             mime_type = str(item.get("mimeType") or "")
+            relative_path = relative_dir / _safe_drive_name(name)
             if mime_type == DRIVE_FOLDER_MIME_TYPE:
+                if allowed_relative_roots is not None and not _path_intersects_allowed_roots(
+                    relative_path,
+                    allowed_relative_roots,
+                ):
+                    result.skipped += 1
+                    continue
                 result.folders_seen += 1
-                recurse(str(item["id"]), relative_dir / _safe_drive_name(name))
+                recurse(str(item["id"]), relative_path)
+                continue
+            if allowed_relative_roots is not None and not any(
+                relative_path.is_relative_to(root) for root in allowed_relative_roots
+            ):
+                result.skipped += 1
                 continue
             if mime_type.startswith("application/vnd.google-apps."):
                 result.skipped += 1
@@ -407,7 +424,7 @@ def pull_google_drive_folder(
                 result.warnings.append(f"skipped non-downloadable file: {relative_dir / name}")
                 continue
             result.files_seen += 1
-            target = _unique_target(cache_root, relative_dir / _safe_drive_name(name), str(item["id"]), used_paths)
+            target = _unique_target(cache_root, relative_path, str(item["id"]), used_paths)
             manifest_entry = manifest["files"].get(str(item["id"]), {})  # type: ignore[index]
             if _is_unchanged(target, item, manifest_entry):
                 result.unchanged += 1
@@ -430,6 +447,10 @@ def pull_google_drive_folder(
     manifest.update({"folderId": folder_id, "cachePath": str(cache_root), "updatedAt": _now_iso()})
     _write_json_private(manifest_path, manifest)
     return result
+
+
+def _path_intersects_allowed_roots(path: Path, allowed_roots: tuple[Path, ...]) -> bool:
+    return any(path.is_relative_to(root) or root.is_relative_to(path) for root in allowed_roots)
 
 
 def configured_drive_cache_dir(workspace: Workspace) -> Path:
@@ -633,13 +654,25 @@ def _load_token(path: Path) -> dict[str, object]:
 
 
 def _is_unchanged(target: Path, item: dict[str, object], manifest_entry: object) -> bool:
-    if not target.exists() or not isinstance(manifest_entry, dict):
+    if not target.exists():
         return False
-    return (
+    if isinstance(manifest_entry, dict) and (
         manifest_entry.get("modifiedTime") == item.get("modifiedTime")
         and manifest_entry.get("size") == item.get("size")
         and manifest_entry.get("md5Checksum") == item.get("md5Checksum")
-    )
+    ):
+        return True
+    expected_size = item.get("size")
+    expected_md5 = item.get("md5Checksum")
+    if not isinstance(expected_size, str) or not isinstance(expected_md5, str):
+        return False
+    if str(target.stat().st_size) != expected_size:
+        return False
+    digest = hashlib.md5()  # noqa: S324 - Google Drive supplies MD5 as file-integrity metadata
+    with target.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest() == expected_md5
 
 
 def _unique_target(cache_root: Path, relative_path: Path, file_id: str, used_paths: dict[Path, str]) -> Path:

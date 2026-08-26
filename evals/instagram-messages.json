@@ -16,6 +16,10 @@
       "criterion": "A stable Drive container accumulates every Instagram export packet while refusing unrelated Drive trees."
     },
     {
+      "id": "test_drive.DrivePullTests.test_configured_sync_downloads_only_instagram_message_subtrees",
+      "criterion": "Message mirroring downloads only Instagram message subtrees and excludes unrelated account-export sections."
+    },
+    {
       "id": "test_drive.DrivePullTests.test_configured_sync_accumulates_every_incremental_provider_export",
       "criterion": "Scheduled Meta delta exports compose into one cumulative local message history instead of replacing earlier packets."
     },

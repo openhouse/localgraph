@@ -119,8 +119,8 @@ python -m localgraph --root "$HOME/Library/Application Support/Localgraph/worksp
 Configure a stable private Drive container ID from its Google Drive URL. The
 container may hold direct `instagram-*` exports or dated
 `meta-*/instagram-*` streams. Localgraph lists only those bounded export
-folders, downloads every not-yet-completed Instagram packet, and never walks
-unrelated container contents:
+folders, downloads the message subtree from every not-yet-completed Instagram
+packet, and never walks unrelated container or account-export contents:
 
 ```bash
 python -m localgraph --root "$HOME/Library/Application Support/Localgraph/workspace" configure-drive-api \
@@ -146,7 +146,9 @@ from every completed packet and deduplicates overlapping messages instead of
 replacing history with the latest delta. User-authored `notes.md` and
 annotations are not part of that source-derived reset. A failed, interrupted,
 offline, or unauthorized pull retains the cumulative last-known-good directory
-and never publishes a partial cache folder.
+and never publishes a partial cache folder. A retry reuses private files whose
+size and provider MD5 checksum already match, then resumes the message-only
+pull.
 
 Freshness and historical completeness are separate. Until a one-time
 all-available-information export has completed, sync status reports
