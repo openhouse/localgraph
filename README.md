@@ -51,6 +51,7 @@ python -m localgraph --root ~/Localgraph scan
 python -m localgraph --root ~/Localgraph import --me "Jamie Burkart" --render
 python -m localgraph --root ~/Localgraph drive-pull
 python -m localgraph --root ~/Localgraph daily-import --me "Jamie Burkart"
+python -m localgraph --root ~/Localgraph instagram-sync --me "Jamie Burkart"
 python -m localgraph --root ~/Localgraph render
 python -m localgraph --root ~/Localgraph view-name person "Alice Example" "instagram:alice"
 ```
@@ -61,10 +62,12 @@ returning message bodies. `import` reads Instagram JSON message exports and an
 iMessage `chat.db`, normalizes people, accounts, groups, threads, messages, and
 media references into SQLite, and can immediately `--render` filesystem views.
 `drive-pull` uses a private authenticated Google Drive API token to mirror a
-configured Drive folder into `sources/instagram-drive-cache`. `daily-import`
-runs that pull first when configured, bootstraps all materialized exports on the
-first run, narrows subsequent runs to the newest synced transfer by default,
-appends a JSONL run log, and renders views. `render` builds deterministic
+configured Drive folder into `sources/instagram-drive-cache`. `instagram-sync`
+selects only the newest `instagram-*` export under a stable Drive container,
+publishes it through the stable `sources/instagram-current` directory symlink
+after the pull completes, imports it, records freshness state, and renders
+views. `daily-import` remains the combined Instagram and iMessage path.
+`render` builds deterministic
 filesystem views from canonical SQLite state and writes
 `_system/source-manifest.json`.
 
@@ -91,7 +94,7 @@ On macOS, `~/Library/Messages/chat.db` is usually protected by Full Disk Access.
 The simplest repeatable workflow is to copy `chat.db` plus its `chat.db-wal` and
 `chat.db-shm` siblings into `sources/imessage/`, then run the import there.
 
-## Daily Google Drive Import
+## Maintained Google Drive Mirror
 
 Preferred setup is authenticated Drive API pull, not public folder sharing.
 Create a Google OAuth desktop client JSON in Google Cloud, keep it private, then
@@ -102,21 +105,33 @@ python -m localgraph --root ~/Localgraph drive-auth \
   --client-secrets "/path/to/oauth-client-secret.json"
 ```
 
-Configure the private Drive folder ID from the Google Drive URL:
+Configure a stable private Drive container ID from its Google Drive URL. The
+container may hold direct `instagram-*` exports or dated
+`meta-*/instagram-*` streams; Localgraph lists folder metadata and downloads
+only the newest Instagram export, never unrelated container contents:
 
 ```bash
 python -m localgraph --root ~/Localgraph configure-drive-api \
   --folder-id "GOOGLE_DRIVE_FOLDER_ID"
 ```
 
-Then test the private cache pull:
+Then test the maintained mirror:
 
 ```bash
-python -m localgraph --root ~/Localgraph drive-pull
+python -m localgraph --root ~/Localgraph instagram-sync \
+  --me "Jamie Burkart" \
+  --me-instagram "jamieburkart"
 ```
 
-This writes downloaded export files under `sources/instagram-drive-cache/` and
-OAuth/token state under `state/`. Both locations are ignored by git.
+This writes immutable downloaded exports under
+`sources/instagram-drive-cache/`, atomically advances
+`sources/instagram-current` only after a complete provider pull, and writes
+OAuth/token and freshness state under `state/`. These locations are ignored by
+git. A failed, interrupted, offline, or unauthorized pull leaves
+`sources/instagram-current` pointing to the last completed export rather than a
+newer partial cache folder. `state/instagram-sync-status.json` distinguishes
+`current`, `degraded`, `pending`, and local-fallback states and records the
+last successful sync time without exposing message bodies.
 
 If you also use Drive Desktop, you can still pin the local synced folder:
 
@@ -140,31 +155,35 @@ explicit and configured local Drive paths, then shallow discovery under Drive
 Desktop roots such as `Shared drives/Instagram` or `My Drive/Instagram`. The
 authenticated pull takes precedence even when an older scheduler still passes
 an explicit Drive Desktop path; this prevents an online-only placeholder from
-bypassing a working API cache. The first scheduled run imports every
-materialized export it can see, so the local
-graph starts complete. Later scheduled runs import only the newest export
-folder by default, so the job does not repeatedly recurse through a large Drive
-archive. Pass `--all-instagram-exports` when you intentionally want an
-archive-wide rescan. If Drive Desktop has not materialized an export locally
-yet, the run is recorded as `pending` instead of blocking on a provider-backed
-folder read.
+bypassing a working API cache. Authenticated sync imports the newest complete
+export, which is itself a full Meta message export. For local Drive fallback,
+the first run imports every materialized export it can see and later runs use
+only the newest export by default. Pass `--all-instagram-exports` when you
+intentionally want a local archive-wide rescan. If Drive Desktop has not
+materialized an export locally yet, the run is recorded as `pending` instead of
+blocking on a provider-backed folder read.
 
-On macOS, install a user LaunchAgent for the daily import:
+On macOS, install the focused Instagram user LaunchAgent:
 
 ```bash
-python -m localgraph --root ~/Localgraph install-daily-import \
+python -m localgraph --root ~/Localgraph install-instagram-sync \
   --me "Jamie Burkart" \
   --me-instagram "jamieburkart" \
-  --hour 3 \
-  --minute 15
+  --interval-minutes 60
 ```
 
-Omit `--instagram-drive-source` when using authenticated Drive API pull; that
-lets `daily-import` pull the configured Drive folder into the private cache
-before importing. The installer writes the job script under `state/bin/` and the
-LaunchAgent plist under `~/Library/LaunchAgents/`. Each run appends a private
-audit record to `state/daily-import-runs.jsonl` and scheduler output to
-`state/daily-import.*.log`.
+The LaunchAgent runs at login and every hour while the Mac is awake. Therefore
+the freshness bound is the next hourly check plus download/import time after a
+new export becomes visible in Drive; no polling system can honestly promise
+instantaneous or offline freshness. The job is Instagram-only, never pins a
+Drive Desktop placeholder, writes its private script under `state/bin/`, and
+writes its plist under `~/Library/LaunchAgents/`. Every run appends a private
+audit record to `state/daily-import-runs.jsonl`; scheduler output stays under
+`state/instagram-sync.*.log`.
+
+The older `install-daily-import` command remains available when a single
+once-daily job should import both Instagram and iMessage. It is not the
+preferred freshness loop for the maintained Instagram mirror.
 
 Generated view paths pair readable labels with a short hash suffix derived from
 a source key:
@@ -211,10 +230,11 @@ generated orientation, navigation, provenance, and transcript-link material.
 
 ## Instagram Evals and Hill Climb
 
-The deterministic Instagram suite covers authenticated acquisition precedence,
-private-cache fallback, overlapping-export deduplication, canonical import and
-rendering, and repository workspace compatibility. It never uses private
-message bodies as committed fixtures.
+The deterministic Instagram suite covers bounded newest-export selection,
+atomic current-mirror publication, last-known-good fallback, hourly scheduling,
+authenticated acquisition precedence, overlapping-export deduplication,
+canonical import and rendering, and repository workspace compatibility. It
+never uses private message bodies as committed fixtures.
 
 ```bash
 make evals

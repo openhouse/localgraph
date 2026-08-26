@@ -148,7 +148,7 @@ class DrivePullTests(unittest.TestCase):
             self.assertEqual(code, 0)
             payload = json.loads(stdout)
             self.assertEqual(payload["googleDrivePull"]["status"], "pulled")
-            self.assertEqual(payload["instagram"]["origin"], "google-drive-api")
+            self.assertEqual(payload["instagram"]["origin"], "google-drive-api-current")
             self.assertEqual(payload["result"]["totals"]["messages"], 1)
             self.assertIn("instagram-drive-cache", payload["instagram"]["importPaths"][0])
 
@@ -194,17 +194,161 @@ class DrivePullTests(unittest.TestCase):
             self.assertEqual(payload["result"]["totals"]["messages"], 1)
             self.assertIn("instagram-drive-cache", payload["instagram"]["importPaths"][0])
 
+    def test_successful_drive_pull_advances_the_current_instagram_mirror(self) -> None:
+        """Catch completed provider pulls that never publish a stable current directory."""
+        with tempfile.TemporaryDirectory() as tmp, fake_drive_api():
+            root = Path(tmp) / "graph"
+            workspace = Workspace(root)
+            workspace.ensure_workspace(force=False)
+            write_token(workspace.state_dir / "google-drive-token.json")
+            code, _ = run_cli(["--root", str(root), "configure-drive-api", "--folder-id", "root"])
+            self.assertEqual(code, 0)
+
+            with patched_env("LOCALGRAPH_DRIVE_API_BASE_URL", FAKE_DRIVE_BASE_URL):
+                code, stdout = run_cli(
+                    [
+                        "--root",
+                        str(root),
+                        "instagram-sync",
+                        "--no-render",
+                        "--me",
+                        "Jamie",
+                        "--me-instagram",
+                        "Jamie",
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            current = workspace.sources_dir / "instagram-current"
+            self.assertTrue(current.is_symlink())
+            self.assertEqual(current.resolve(), Path(payload["instagram"]["resolvedExportPath"]))
+            self.assertEqual(Path(payload["instagram"]["path"]).resolve(), current.resolve())
+            self.assertEqual(payload["instagram"]["origin"], "google-drive-api-current")
+            self.assertEqual(payload["instagramSync"]["status"], "current")
+            self.assertEqual(payload["instagramSync"]["messageFiles"], 1)
+            status = json.loads((workspace.state_dir / "instagram-sync-status.json").read_text(encoding="utf-8"))
+            self.assertEqual(Path(status["localMirrorPath"]).resolve(), current.resolve())
+            self.assertEqual(status["status"], "current")
+
+    def test_configured_sync_selects_only_the_latest_export_from_a_drive_container(self) -> None:
+        """Catch a stable container configuration downloading unrelated or older Drive trees."""
+        with tempfile.TemporaryDirectory() as tmp, fake_drive_api(latest_container_children, latest_container_payloads):
+            root = Path(tmp) / "graph"
+            workspace = Workspace(root)
+            workspace.ensure_workspace(force=False)
+            write_token(workspace.state_dir / "google-drive-token.json")
+            code, _ = run_cli(["--root", str(root), "configure-drive-api", "--folder-id", "root"])
+            self.assertEqual(code, 0)
+
+            with patched_env("LOCALGRAPH_DRIVE_API_BASE_URL", FAKE_DRIVE_BASE_URL):
+                code, stdout = run_cli(
+                    [
+                        "--root",
+                        str(root),
+                        "instagram-sync",
+                        "--no-render",
+                        "--me",
+                        "Jamie",
+                        "--me-instagram",
+                        "Jamie",
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["googleDrivePull"]["selectedExportName"], "instagram-jamie-2026-08-25-latest")
+            self.assertEqual(payload["googleDrivePull"]["downloaded"], 1)
+            self.assertIn("instagram-jamie-2026-08-25-latest", payload["instagram"]["resolvedExportPath"])
+            old_export = workspace.sources_dir / "instagram-drive-cache" / "meta-2026-Jul-01-00-00-00"
+            self.assertFalse(old_export.exists())
+
+    def test_failed_drive_pull_keeps_the_last_known_good_current_mirror(self) -> None:
+        """Catch a partial newer cache folder replacing the last completed provider snapshot."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "graph"
+            workspace = Workspace(root)
+            workspace.ensure_workspace(force=False)
+            cache = workspace.sources_dir / "instagram-drive-cache"
+            old_file = (
+                cache
+                / "meta-2026"
+                / "instagram-jamie-2026-07-09"
+                / "your_instagram_activity"
+                / "messages"
+                / "inbox"
+                / "alice_123"
+                / "message_1.json"
+            )
+            old_file.parent.mkdir(parents=True)
+            old_file.write_bytes(message_payload())
+            partial_new = (
+                cache
+                / "meta-2026"
+                / "instagram-jamie-2026-07-10"
+                / "your_instagram_activity"
+                / "messages"
+                / "inbox"
+                / "partial_456"
+                / "message_1.json"
+            )
+            partial_new.parent.mkdir(parents=True)
+            partial_new.write_text(
+                json.dumps(
+                    {
+                        "participants": [{"name": "Jamie"}, {"name": "Partial"}],
+                        "title": "Partial",
+                        "messages": [
+                            {
+                                "sender_name": "Partial",
+                                "timestamp_ms": 1800000000000,
+                                "content": "must not import a partial provider pull",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            current = workspace.sources_dir / "instagram-current"
+            current.symlink_to(old_file.parents[4], target_is_directory=True)
+            code, _ = run_cli(["--root", str(root), "configure-drive-api", "--folder-id", "root"])
+            self.assertEqual(code, 0)
+
+            code, stdout = run_cli(
+                [
+                    "--root",
+                    str(root),
+                    "instagram-sync",
+                    "--no-render",
+                    "--me",
+                    "Jamie",
+                    "--me-instagram",
+                    "Jamie",
+                ]
+            )
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(current.resolve(), old_file.parents[4].resolve())
+            self.assertEqual(payload["instagram"]["origin"], "google-drive-last-known-good")
+            self.assertEqual(payload["instagramSync"]["status"], "degraded")
+            self.assertEqual(payload["result"]["totals"]["messages"], 1)
+            self.assertEqual(payload["result"]["totals"]["threads"], 1)
+
 
 FAKE_DRIVE_BASE_URL = "https://drive.test/drive/v3"
 
 
 @contextlib.contextmanager
-def fake_drive_api():
-    with mock.patch("localgraph.drive.urllib.request.urlopen", side_effect=fake_urlopen):
+def fake_drive_api(children_factory=None, payload_factory=None):
+    def urlopen(request, timeout=0):  # type: ignore[no-untyped-def]
+        return fake_urlopen(request, timeout=timeout, children_factory=children_factory, payload_factory=payload_factory)
+
+    with mock.patch("localgraph.drive.urllib.request.urlopen", side_effect=urlopen):
         yield
 
 
-def fake_urlopen(request, timeout=0):  # type: ignore[no-untyped-def]
+def fake_urlopen(request, timeout=0, *, children_factory=None, payload_factory=None):  # type: ignore[no-untyped-def]
     url = request.full_url if hasattr(request, "full_url") else str(request)
     parsed = urllib.parse.urlparse(url)
     if parsed.path == "/drive/v3/files":
@@ -212,9 +356,12 @@ def fake_urlopen(request, timeout=0):  # type: ignore[no-untyped-def]
         q = params.get("q", [""])[0]
         match = re.search(r"'([^']+)' in parents", q)
         parent = match.group(1) if match else ""
-        return FakeResponse(json.dumps({"files": fake_children().get(parent, [])}).encode("utf-8"))
-    if parsed.path == "/drive/v3/files/file-message":
-        return FakeResponse(message_payload())
+        children = children_factory() if children_factory is not None else fake_children()
+        return FakeResponse(json.dumps({"files": children.get(parent, [])}).encode("utf-8"))
+    file_id = parsed.path.rsplit("/", 1)[-1]
+    payloads = payload_factory() if payload_factory is not None else {"file-message": message_payload()}
+    if file_id in payloads:
+        return FakeResponse(payloads[file_id])
     raise AssertionError(f"unexpected fake Drive URL: {url}")
 
 
@@ -259,6 +406,37 @@ def fake_children() -> dict[str, list[dict[str, object]]]:
             }
         ],
     }
+
+
+def latest_container_children() -> dict[str, list[dict[str, object]]]:
+    return {
+        "root": [
+            folder("folder-unrelated", "Unrelated private folder"),
+            folder("folder-meta-old", "meta-2026-Jul-01-00-00-00"),
+            folder("folder-meta-new", "meta-2026-Aug-19-12-26-26"),
+        ],
+        "folder-meta-old": [folder("folder-export-old", "instagram-jamie-2026-08-24-old")],
+        "folder-meta-new": [folder("folder-export-latest", "instagram-jamie-2026-08-25-latest")],
+        "folder-export-latest": [folder("folder-activity-latest", "your_instagram_activity")],
+        "folder-activity-latest": [folder("folder-messages-latest", "messages")],
+        "folder-messages-latest": [folder("folder-inbox-latest", "inbox")],
+        "folder-inbox-latest": [folder("folder-thread-latest", "alice_123")],
+        "folder-thread-latest": [
+            {
+                "id": "file-latest",
+                "name": "message_1.json",
+                "mimeType": "application/json",
+                "modifiedTime": "2026-08-25T19:04:43.973Z",
+                "size": str(len(message_payload())),
+                "md5Checksum": "latest-fixture-md5",
+                "capabilities": {"canDownload": True},
+            }
+        ],
+    }
+
+
+def latest_container_payloads() -> dict[str, bytes]:
+    return {"file-latest": message_payload()}
 
 
 def write_token(path: Path) -> None:

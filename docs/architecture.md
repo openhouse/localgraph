@@ -57,9 +57,16 @@ Both importers normalize into the same canonical tables:
   attachments.
 - `graph_edges` for derived thread, group, and participant relationships.
 
-The importers are intentionally local-first. Google Drive automation pulls
-private Drive API files into `sources/instagram-drive-cache/` before import when
-an OAuth token and folder ID are configured. The same `daily-import` path can
+The importers are intentionally local-first. Google Drive automation lists only
+folder metadata under a configured stable container, selects the newest direct
+`instagram-*` or nested `meta-*/instagram-*` export, and downloads only that
+private subtree into `sources/instagram-drive-cache/`. After the pull completes,
+an atomic `sources/instagram-current` symlink advances to the selected export.
+Provider, network, or partial-transfer failures retain the last completed
+pointer and mark `state/instagram-sync-status.json` degraded. The focused
+`instagram-sync` path imports and renders that pointer; a run-at-login and
+hourly macOS LaunchAgent provides a bounded freshness loop. The same
+`daily-import` path can
 also use Drive Desktop as a local source fallback: it resolves an explicit,
 configured, or shallow-discovered Instagram transfer folder, bootstraps all
 materialized exports when no prior Instagram imports exist, narrows later

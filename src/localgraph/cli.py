@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from .automation import configure_google_drive_source, install_daily_import, run_daily_import
+from .automation import configure_google_drive_source, install_daily_import, install_instagram_sync, run_daily_import
 from .drive import DriveAPIError, authenticate_google_drive, configure_google_drive_api, pull_google_drive_folder
 from .ingest import import_workspace_sources
 from .instagram import scan_instagram_source
@@ -89,6 +89,11 @@ def build_parser() -> argparse.ArgumentParser:
     daily_import.add_argument("--me-instagram", action="append", default=[], help="Instagram self name. May be repeated.")
     daily_import.add_argument("--me-imessage", action="append", default=[], help="iMessage self handle. May be repeated.")
 
+    instagram_sync = commands.add_parser("instagram-sync", help="Refresh the current Instagram mirror and canonical views.")
+    instagram_sync.add_argument("--no-render", action="store_true", help="Do not render views after import.")
+    instagram_sync.add_argument("--me", default="Me", help="Display name for your own identity. Defaults to 'Me'.")
+    instagram_sync.add_argument("--me-instagram", action="append", default=[], help="Instagram self name. May be repeated.")
+
     install_daily = commands.add_parser("install-daily-import", help="Install a macOS LaunchAgent for daily imports.")
     install_daily.add_argument("--instagram-drive-source", help="Local Google Drive Instagram folder to pin in the daily job.")
     install_daily.add_argument("--skip-imessage", action="store_true", help="Do not import iMessage from the daily job.")
@@ -99,6 +104,13 @@ def build_parser() -> argparse.ArgumentParser:
     install_daily.add_argument("--minute", type=int, default=15, help="LaunchAgent minute, 0-59. Defaults to 15.")
     install_daily.add_argument("--label", default="com.openhouse.localgraph.daily-import", help="LaunchAgent label.")
     install_daily.add_argument("--dry-run", action="store_true", help="Print planned paths without writing files.")
+
+    install_sync = commands.add_parser("install-instagram-sync", help="Install an hourly macOS Instagram sync LaunchAgent.")
+    install_sync.add_argument("--me", default="Me", help="Display name for your own identity. Defaults to 'Me'.")
+    install_sync.add_argument("--me-instagram", action="append", default=[], help="Instagram self name. May be repeated.")
+    install_sync.add_argument("--interval-minutes", type=int, default=60, help="Provider check interval, 5-1440 minutes. Defaults to 60.")
+    install_sync.add_argument("--label", default="com.openhouse.localgraph.instagram-sync", help="LaunchAgent label.")
+    install_sync.add_argument("--dry-run", action="store_true", help="Print planned paths without writing files.")
 
     render = commands.add_parser("render", help="Render filesystem views from canonical SQLite state.")
     render.add_argument("--source", help="Optionally scan an Instagram source directory and include it in the render manifest.")
@@ -175,6 +187,20 @@ def main(argv: list[str] | None = None) -> int:
                 me_instagram=args.me_instagram,
                 me_imessage=args.me_imessage,
             )
+        elif args.command == "instagram-sync":
+            summary = command_daily_import(
+                workspace,
+                instagram_drive_source=None,
+                imessage_db=None,
+                skip_instagram=False,
+                skip_imessage=True,
+                render=not args.no_render,
+                write_config=False,
+                latest_instagram_only=True,
+                me=args.me,
+                me_instagram=args.me_instagram,
+                me_imessage=[],
+            )
         elif args.command == "install-daily-import":
             summary = command_install_daily_import(
                 workspace,
@@ -185,6 +211,15 @@ def main(argv: list[str] | None = None) -> int:
                 me_imessage=args.me_imessage,
                 hour=args.hour,
                 minute=args.minute,
+                label=args.label,
+                dry_run=args.dry_run,
+            )
+        elif args.command == "install-instagram-sync":
+            summary = command_install_instagram_sync(
+                workspace,
+                me=args.me,
+                me_instagram=args.me_instagram,
+                interval_minutes=args.interval_minutes,
                 label=args.label,
                 dry_run=args.dry_run,
             )
@@ -385,6 +420,25 @@ def command_install_daily_import(
         me_imessage_handles=me_imessage,
         hour=hour,
         minute=minute,
+        label=label,
+        dry_run=dry_run,
+    )
+
+
+def command_install_instagram_sync(
+    workspace: Workspace,
+    *,
+    me: str,
+    me_instagram: list[str],
+    interval_minutes: int,
+    label: str,
+    dry_run: bool,
+) -> dict[str, object]:
+    return install_instagram_sync(
+        workspace,
+        me_name=me,
+        me_instagram_names=me_instagram,
+        interval_minutes=interval_minutes,
         label=label,
         dry_run=dry_run,
     )

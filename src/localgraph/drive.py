@@ -5,6 +5,7 @@ import hashlib
 import http.server
 import json
 import os
+import re
 import secrets
 import sys
 import time
@@ -38,9 +39,12 @@ class DrivePullResult:
     skipped: int = 0
     bytes_downloaded: int = 0
     warnings: list[str] = field(default_factory=list)
+    configured_folder_id: str | None = None
+    selected_export_id: str | None = None
+    selected_export_name: str | None = None
 
     def to_json(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "status": "pulled",
             "folderId": self.folder_id,
             "cachePath": str(self.cache_path),
@@ -53,6 +57,13 @@ class DrivePullResult:
             "bytesDownloaded": self.bytes_downloaded,
             "warnings": self.warnings,
         }
+        if self.configured_folder_id is not None:
+            result["configuredFolderId"] = self.configured_folder_id
+        if self.selected_export_id is not None:
+            result["selectedExportId"] = self.selected_export_id
+        if self.selected_export_name is not None:
+            result["selectedExportName"] = self.selected_export_name
+        return result
 
 
 class DriveAPIError(RuntimeError):
@@ -163,12 +174,94 @@ def pull_configured_google_drive_source(workspace: Workspace) -> DrivePullResult
     folder_id = instagram.get("googleDriveFolderId") if isinstance(instagram, dict) else None
     if not folder_id:
         return None
-    return pull_google_drive_folder(
+    return pull_latest_instagram_export(
         workspace,
-        folder_id=str(folder_id),
+        container_folder_id=str(folder_id),
         cache_dir=configured_drive_cache_dir(workspace),
         token_path=configured_drive_token_path(workspace),
     )
+
+
+@dataclass(frozen=True)
+class InstagramExportFolder:
+    folder_id: str
+    name: str
+    relative_path: Path
+
+
+def pull_latest_instagram_export(
+    workspace: Workspace,
+    *,
+    container_folder_id: str,
+    cache_dir: Path | None = None,
+    token_path: Path | None = None,
+    api_base_url: str | None = None,
+) -> DrivePullResult:
+    workspace.ensure_workspace(force=False)
+    cache_root = cache_dir or configured_drive_cache_dir(workspace)
+    token_source = token_path or configured_drive_token_path(workspace)
+    token = _load_token(token_source)
+    access_token = _valid_access_token(token_source, token)
+    base_url = api_base_url or os.environ.get("LOCALGRAPH_DRIVE_API_BASE_URL", DRIVE_API_BASE_URL)
+    selected = _select_latest_instagram_export(base_url, access_token, container_folder_id)
+    selected_cache = cache_root / selected.relative_path
+    result = pull_google_drive_folder(
+        workspace,
+        folder_id=selected.folder_id,
+        cache_dir=selected_cache,
+        token_path=token_source,
+        api_base_url=base_url,
+    )
+    result.configured_folder_id = container_folder_id
+    result.selected_export_id = selected.folder_id
+    result.selected_export_name = selected.name
+    return result
+
+
+def _select_latest_instagram_export(
+    base_url: str,
+    access_token: str,
+    container_folder_id: str,
+) -> InstagramExportFolder:
+    children = _list_drive_children(base_url, access_token, container_folder_id)
+    candidates: list[InstagramExportFolder] = []
+    for item in children:
+        if str(item.get("mimeType") or "") != DRIVE_FOLDER_MIME_TYPE:
+            continue
+        name = str(item.get("name") or "")
+        folder_id = str(item.get("id") or "")
+        if name.startswith("instagram-") and folder_id:
+            candidates.append(InstagramExportFolder(folder_id, name, Path(_safe_drive_name(name))))
+            continue
+        if not name.startswith("meta-") or not folder_id:
+            continue
+        for export in _list_drive_children(base_url, access_token, folder_id):
+            export_name = str(export.get("name") or "")
+            export_id = str(export.get("id") or "")
+            if (
+                str(export.get("mimeType") or "") == DRIVE_FOLDER_MIME_TYPE
+                and export_name.startswith("instagram-")
+                and export_id
+            ):
+                candidates.append(
+                    InstagramExportFolder(
+                        export_id,
+                        export_name,
+                        Path(_safe_drive_name(name)) / _safe_drive_name(export_name),
+                    )
+                )
+    if not candidates:
+        raise DriveAPIError(
+            "configured Google Drive container has no direct instagram-* exports or meta-*/instagram-* exports"
+        )
+    return max(candidates, key=lambda candidate: (_instagram_export_name_key(candidate.name), candidate.relative_path.as_posix()))
+
+
+def _instagram_export_name_key(name: str) -> tuple[int, int, int]:
+    match = re.search(r"-(20\d{2})-(\d{2})-(\d{2})(?:-|$)", name)
+    if match is None:
+        return (0, 0, 0)
+    return tuple(int(value) for value in match.groups())  # type: ignore[return-value]
 
 
 def pull_google_drive_folder(

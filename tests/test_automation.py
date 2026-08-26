@@ -8,12 +8,15 @@ import plistlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from localgraph.automation import (
     candidate_instagram_drive_sources,
     install_daily_import,
+    install_instagram_sync,
     latest_instagram_export_source,
     launchd_plist,
+    resolve_instagram_import_sources,
 )
 from localgraph.cli import main
 from localgraph.paths import Workspace
@@ -187,6 +190,21 @@ class AutomationTests(unittest.TestCase):
 
             self.assertEqual(latest_instagram_export_source(root), (root / "meta-new" / "instagram-new").resolve())
 
+    def test_exact_export_root_ignores_nested_spotlight_duplicates(self) -> None:
+        """Catch macOS metadata indexing splitting one export into two import roots."""
+        with tempfile.TemporaryDirectory() as tmp:
+            export = Path(tmp) / "instagram-jamie-2026-08-25-latest"
+            nested = export / "your_instagram_activity"
+            (nested / "messages" / "inbox" / "alice_123").mkdir(parents=True)
+
+            with mock.patch(
+                "localgraph.automation._indexed_instagram_export_sources",
+                return_value=[export.resolve(), nested.resolve()],
+            ):
+                sources = resolve_instagram_import_sources(export, all_materialized_exports=True)
+
+            self.assertEqual(sources, [export.resolve()])
+
     def test_install_daily_import_dry_run_reports_paths_without_writing_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Workspace(Path(tmp) / "graph")
@@ -226,6 +244,30 @@ class AutomationTests(unittest.TestCase):
         self.assertEqual(encoded["Label"], "com.example.localgraph.test")
         self.assertEqual(encoded["StartCalendarInterval"], {"Hour": 3, "Minute": 15})
         self.assertEqual(encoded["ProgramArguments"][0], "/bin/zsh")
+
+    def test_instagram_sync_launchagent_runs_hourly_and_at_login(self) -> None:
+        """Catch a freshness job regressing to a once-daily or login-disabled schedule."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Workspace(Path(tmp) / "graph")
+            home = Path(tmp) / "home"
+
+            result = install_instagram_sync(
+                workspace,
+                interval_minutes=60,
+                me_name="Jamie",
+                me_instagram_names=["jamieburkart"],
+                label="com.example.localgraph.instagram-sync",
+                home=home,
+            )
+
+            plist = plistlib.loads(Path(result["plist"]).read_bytes())
+            script = Path(result["script"]).read_text(encoding="utf-8")
+            self.assertEqual(plist["StartInterval"], 3600)
+            self.assertTrue(plist["RunAtLoad"])
+            self.assertEqual(plist["ProcessType"], "Background")
+            self.assertNotIn("StartCalendarInterval", plist)
+            self.assertIn("instagram-sync", script)
+            self.assertNotIn("--instagram-drive-source", script)
 
 
 def run_cli(argv: list[str]) -> tuple[int, str]:

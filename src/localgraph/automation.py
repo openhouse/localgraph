@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import plistlib
 import shlex
 import sqlite3
@@ -23,6 +24,8 @@ from .schema import connect, initialize_schema
 
 
 DEFAULT_LAUNCHD_LABEL = "com.openhouse.localgraph.daily-import"
+DEFAULT_INSTAGRAM_SYNC_LABEL = "com.openhouse.localgraph.instagram-sync"
+DEFAULT_INSTAGRAM_SYNC_INTERVAL_MINUTES = 60
 
 
 @dataclass
@@ -30,13 +33,17 @@ class DriveSourceResolution:
     path: Path
     origin: str
     warnings: list[str] = field(default_factory=list)
+    resolved_export_path: Path | None = None
 
     def to_json(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "path": str(self.path),
             "origin": self.origin,
             "warnings": self.warnings,
         }
+        if self.resolved_export_path is not None:
+            result["resolvedExportPath"] = str(self.resolved_export_path)
+        return result
 
 
 def configure_google_drive_source(workspace: Workspace, source_path: Path) -> dict[str, object]:
@@ -79,19 +86,37 @@ def run_daily_import(
             pull_result = pull_configured_google_drive_source(workspace)
             if pull_result is not None:
                 drive_pull = pull_result.to_json()
-                resolution = DriveSourceResolution(
-                    pull_result.cache_path.expanduser().resolve(),
-                    "google-drive-api",
-                )
+                latest_export = resolve_latest_instagram_export_source(pull_result.cache_path)
+                if latest_export is not None:
+                    current = activate_instagram_current_mirror(workspace, latest_export)
+                    resolution = DriveSourceResolution(
+                        current,
+                        "google-drive-api-current",
+                        resolved_export_path=latest_export,
+                    )
+                else:
+                    resolution = DriveSourceResolution(
+                        pull_result.cache_path.expanduser().resolve(),
+                        "google-drive-api",
+                    )
         except DriveAPIError as exc:
             drive_pull_error = str(exc)
-            cache_candidate = configured_drive_cache_dir(workspace)
-            if cache_candidate.exists() and int(scan_instagram_source(cache_candidate)["totalMessageFiles"]) > 0:
+            current = valid_instagram_current_mirror(workspace)
+            if current is not None:
                 resolution = DriveSourceResolution(
-                    cache_candidate.expanduser().resolve(),
-                    "google-drive-cache",
-                    ["authenticated Google Drive pull failed; using the existing private cache"],
+                    current,
+                    "google-drive-last-known-good",
+                    ["authenticated Google Drive pull failed; using the last completed local mirror"],
+                    resolved_export_path=current.resolve(),
                 )
+            else:
+                cache_candidate = configured_drive_cache_dir(workspace)
+                if cache_candidate.exists() and int(scan_instagram_source(cache_candidate)["totalMessageFiles"]) > 0:
+                    resolution = DriveSourceResolution(
+                        cache_candidate.expanduser().resolve(),
+                        "google-drive-cache",
+                        ["authenticated Google Drive pull failed; using the existing private cache"],
+                    )
 
     if resolution is None:
         resolution = resolve_instagram_drive_source(workspace, explicit=instagram_drive_source)
@@ -154,8 +179,18 @@ def run_daily_import(
             source_scan = combined_instagram_source_scan(instagram_import_sources) if instagram_import_sources else None
             result["render"] = render_views(db, workspace, source_scan=source_scan)
 
+    started_at = _now_iso()
+    sync_status = instagram_sync_status(
+        workspace,
+        checked_at=started_at,
+        resolution=resolution,
+        drive_pull=drive_pull,
+        drive_pull_error=drive_pull_error,
+        import_sources=instagram_import_sources,
+        pending=instagram_pending_warning is not None,
+    )
     summary = {
-        "startedAt": _now_iso(),
+        "startedAt": started_at,
         "workspace": str(workspace.root),
         "instagram": {
             **resolution.to_json(),
@@ -168,8 +203,10 @@ def run_daily_import(
             "status": "error" if drive_pull_error else "not-configured",
             "error": drive_pull_error,
         },
+        "instagramSync": sync_status,
         "result": result,
     }
+    write_instagram_sync_status(workspace, sync_status)
     run_log = append_daily_run_log(workspace, summary)
     summary["runLog"] = str(run_log)
     return summary
@@ -246,9 +283,54 @@ def resolve_instagram_import_sources(source_path: Path, *, all_materialized_expo
     return [source]
 
 
+def instagram_current_mirror_path(workspace: Workspace) -> Path:
+    return workspace.sources_dir / "instagram-current"
+
+
+def activate_instagram_current_mirror(workspace: Workspace, export_source: Path) -> Path:
+    export = export_source.expanduser().resolve()
+    message_files = int(scan_instagram_source(export)["totalMessageFiles"])
+    if message_files <= 0:
+        raise ValueError(f"refusing to publish an Instagram mirror without message files: {export}")
+    current = instagram_current_mirror_path(workspace)
+    if current.exists() and not current.is_symlink():
+        raise ValueError(f"refusing to replace a non-symlink Instagram mirror path: {current}")
+    current.parent.mkdir(parents=True, exist_ok=True)
+    temporary = current.with_name(f".{current.name}.{os.getpid()}.tmp")
+    if temporary.is_symlink() or temporary.exists():
+        temporary.unlink()
+    target = Path(os.path.relpath(export, start=current.parent))
+    temporary.symlink_to(target, target_is_directory=True)
+    os.replace(temporary, current)
+    return current
+
+
+def valid_instagram_current_mirror(workspace: Workspace) -> Path | None:
+    current = instagram_current_mirror_path(workspace)
+    if not current.is_symlink() or not current.exists():
+        return None
+    if int(scan_instagram_source(current)["totalMessageFiles"]) <= 0:
+        return None
+    return current
+
+
 def _materialized_instagram_export_sources(source: Path) -> list[Path]:
+    if _looks_like_instagram_export(source):
+        return [source.expanduser().resolve()]
     candidates = [*(_indexed_instagram_export_sources(source)), *(_subprocess_shallow_instagram_export_sources(source))]
     return sorted(set(candidates), key=_path_freshness_key)
+
+
+def _looks_like_instagram_export(path: Path) -> bool:
+    return any(
+        (path / relative).is_dir()
+        for relative in (
+            "your_instagram_activity/messages/inbox",
+            "your_instagram_activity/messages/message_requests",
+            "messages/inbox",
+            "messages/message_requests",
+        )
+    )
 
 
 def google_drive_roots(home: Path | None = None) -> list[Path]:
@@ -314,6 +396,54 @@ def install_daily_import(
     }
 
 
+def install_instagram_sync(
+    workspace: Workspace,
+    *,
+    interval_minutes: int = DEFAULT_INSTAGRAM_SYNC_INTERVAL_MINUTES,
+    label: str = DEFAULT_INSTAGRAM_SYNC_LABEL,
+    me_name: str = "Me",
+    me_instagram_names: list[str] | None = None,
+    dry_run: bool = False,
+    home: Path | None = None,
+) -> dict[str, object]:
+    if not (5 <= interval_minutes <= 1440):
+        raise ValueError("--interval-minutes must be between 5 and 1440")
+    workspace.ensure_workspace(force=False)
+    home_dir = (home or Path.home()).expanduser()
+    script_path = workspace.state_dir / "bin" / "localgraph-instagram-sync.sh"
+    plist_path = home_dir / "Library" / "LaunchAgents" / f"{label}.plist"
+    script = instagram_sync_script(
+        workspace,
+        me_name=me_name,
+        me_instagram_names=me_instagram_names or [],
+    )
+    plist = interval_launchd_plist(
+        label=label,
+        script_path=script_path,
+        interval_seconds=interval_minutes * 60,
+        workspace=workspace,
+    )
+
+    if not dry_run:
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        script_path.write_text(script, encoding="utf-8")
+        script_path.chmod(0o755)
+        plist_path.parent.mkdir(parents=True, exist_ok=True)
+        plist_path.write_bytes(plistlib.dumps(plist, sort_keys=True))
+
+    return {
+        "label": label,
+        "script": str(script_path),
+        "plist": str(plist_path),
+        "intervalMinutes": interval_minutes,
+        "runAtLoad": True,
+        "dryRun": dry_run,
+        "bootstrapCommand": f"launchctl bootstrap gui/$(id -u) {shlex.quote(str(plist_path))}",
+        "kickstartCommand": f"launchctl kickstart -k gui/$(id -u)/{label}",
+        "runCommand": f"{shlex.quote(str(script_path))}",
+    }
+
+
 def daily_import_script(
     workspace: Workspace,
     *,
@@ -362,6 +492,44 @@ def daily_import_script(
     )
 
 
+def instagram_sync_script(
+    workspace: Workspace,
+    *,
+    me_name: str,
+    me_instagram_names: list[str],
+) -> str:
+    repo_root = Path(__file__).resolve().parents[2]
+    python_path = repo_root / "src"
+    args = [
+        sys.executable,
+        "-m",
+        "localgraph",
+        "--root",
+        str(workspace.root),
+        "instagram-sync",
+        "--me",
+        me_name,
+    ]
+    for value in me_instagram_names:
+        args.extend(["--me-instagram", value])
+
+    exports = []
+    if (repo_root / "pyproject.toml").exists():
+        exports.append(f"export PYTHONPATH={shlex.quote(str(python_path))}:${{PYTHONPATH:-}}")
+    command = " ".join(shlex.quote(part) for part in args)
+    log_path = workspace.state_dir / "instagram-sync.launchd.log"
+    return "\n".join(
+        [
+            "#!/bin/zsh",
+            "set -euo pipefail",
+            *exports,
+            f"mkdir -p {shlex.quote(str(workspace.state_dir))}",
+            f"{command} >> {shlex.quote(str(log_path))} 2>&1",
+            "",
+        ]
+    )
+
+
 def launchd_plist(*, label: str, script_path: Path, hour: int, minute: int, workspace: Workspace) -> dict[str, object]:
     log_path = workspace.state_dir / "daily-import.launchd.stdout.log"
     error_log_path = workspace.state_dir / "daily-import.launchd.stderr.log"
@@ -376,11 +544,91 @@ def launchd_plist(*, label: str, script_path: Path, hour: int, minute: int, work
     }
 
 
+def interval_launchd_plist(
+    *,
+    label: str,
+    script_path: Path,
+    interval_seconds: int,
+    workspace: Workspace,
+) -> dict[str, object]:
+    return {
+        "Label": label,
+        "ProgramArguments": ["/bin/zsh", str(script_path)],
+        "StartInterval": interval_seconds,
+        "RunAtLoad": True,
+        "ProcessType": "Background",
+        "ThrottleInterval": 60,
+        "StandardOutPath": str(workspace.state_dir / "instagram-sync.launchd.stdout.log"),
+        "StandardErrorPath": str(workspace.state_dir / "instagram-sync.launchd.stderr.log"),
+        "WorkingDirectory": str(workspace.root),
+    }
+
+
 def append_daily_run_log(workspace: Workspace, summary: dict[str, object]) -> Path:
     path = workspace.state_dir / "daily-import-runs.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(f"{json.dumps(summary, ensure_ascii=False, sort_keys=True, default=str)}\n")
+    return path
+
+
+def instagram_sync_status(
+    workspace: Workspace,
+    *,
+    checked_at: str,
+    resolution: DriveSourceResolution,
+    drive_pull: dict[str, object] | None,
+    drive_pull_error: str | None,
+    import_sources: list[Path],
+    pending: bool,
+) -> dict[str, object]:
+    previous = load_instagram_sync_status(workspace)
+    current = valid_instagram_current_mirror(workspace)
+    message_files = sum(int(scan_instagram_source(source)["totalMessageFiles"]) for source in import_sources)
+    if resolution.origin == "google-drive-api-current" and not pending:
+        status = "current"
+        last_successful_sync_at: object = checked_at
+    elif resolution.origin == "google-drive-last-known-good":
+        status = "degraded"
+        last_successful_sync_at = previous.get("lastSuccessfulSyncAt")
+    elif pending:
+        status = "pending"
+        last_successful_sync_at = previous.get("lastSuccessfulSyncAt")
+    else:
+        status = "local-fallback"
+        last_successful_sync_at = previous.get("lastSuccessfulSyncAt")
+    return {
+        "schemaVersion": 1,
+        "status": status,
+        "checkedAt": checked_at,
+        "lastSuccessfulSyncAt": last_successful_sync_at,
+        "localMirrorPath": str(current) if current is not None else None,
+        "resolvedExportPath": str(current.resolve()) if current is not None else None,
+        "messageFiles": message_files,
+        "origin": resolution.origin,
+        "pullStatus": drive_pull.get("status") if drive_pull is not None else ("error" if drive_pull_error else "not-configured"),
+        "lastError": drive_pull_error,
+    }
+
+
+def load_instagram_sync_status(workspace: Workspace) -> dict[str, object]:
+    path = workspace.state_dir / "instagram-sync-status.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_instagram_sync_status(workspace: Workspace, status: dict[str, object]) -> Path:
+    path = workspace.state_dir / "instagram-sync-status.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(f"{json.dumps(status, indent=2, sort_keys=True)}\n", encoding="utf-8")
+    temporary.chmod(0o600)
+    os.replace(temporary, path)
     return path
 
 
@@ -488,12 +736,14 @@ def iter_dirs(path):
 roots = []
 if looks_like_export(source):
     roots.append(str(source))
-for child in iter_dirs(source):
-    if looks_like_export(child):
-        roots.append(str(child))
-    for grandchild in iter_dirs(child):
-        if looks_like_export(grandchild):
-            roots.append(str(grandchild))
+else:
+    for child in iter_dirs(source):
+        if looks_like_export(child):
+            roots.append(str(child))
+        else:
+            for grandchild in iter_dirs(child):
+                if looks_like_export(grandchild):
+                    roots.append(str(grandchild))
 print(json.dumps(roots))
 """
     try:
