@@ -100,8 +100,19 @@ Preferred setup is authenticated Drive API pull, not public folder sharing.
 Create a Google OAuth desktop client JSON in Google Cloud, keep it private, then
 authorize Localgraph:
 
+For scheduled use on macOS, keep the operational workspace on the internal
+volume. Background LaunchAgents cannot reliably read removable-volume
+worktrees under macOS privacy controls. The installer snapshots the required
+Python runtime under `~/Library/Application Support/Localgraph/runtime`; the
+recommended maintained directory is:
+
+```text
+~/Library/Application Support/Localgraph/workspace/sources/instagram-current
+```
+
 ```bash
-python -m localgraph --root ~/Localgraph drive-auth \
+python -m localgraph --root "$HOME/Library/Application Support/Localgraph/workspace" init
+python -m localgraph --root "$HOME/Library/Application Support/Localgraph/workspace" drive-auth \
   --client-secrets "/path/to/oauth-client-secret.json"
 ```
 
@@ -111,14 +122,14 @@ container may hold direct `instagram-*` exports or dated
 only the newest Instagram export, never unrelated container contents:
 
 ```bash
-python -m localgraph --root ~/Localgraph configure-drive-api \
+python -m localgraph --root "$HOME/Library/Application Support/Localgraph/workspace" configure-drive-api \
   --folder-id "GOOGLE_DRIVE_FOLDER_ID"
 ```
 
 Then test the maintained mirror:
 
 ```bash
-python -m localgraph --root ~/Localgraph instagram-sync \
+python -m localgraph --root "$HOME/Library/Application Support/Localgraph/workspace" instagram-sync \
   --me "Jamie Burkart" \
   --me-instagram "jamieburkart"
 ```
@@ -166,7 +177,7 @@ blocking on a provider-backed folder read.
 On macOS, install the focused Instagram user LaunchAgent:
 
 ```bash
-python -m localgraph --root ~/Localgraph install-instagram-sync \
+python -m localgraph --root "$HOME/Library/Application Support/Localgraph/workspace" install-instagram-sync \
   --me "Jamie Burkart" \
   --me-instagram "jamieburkart" \
   --interval-minutes 60
@@ -176,10 +187,11 @@ The LaunchAgent runs at login and every hour while the Mac is awake. Therefore
 the freshness bound is the next hourly check plus download/import time after a
 new export becomes visible in Drive; no polling system can honestly promise
 instantaneous or offline freshness. The job is Instagram-only, never pins a
-Drive Desktop placeholder, writes its private script under `state/bin/`, and
-writes its plist under `~/Library/LaunchAgents/`. Every run appends a private
-audit record to `state/daily-import-runs.jsonl`; scheduler output stays under
-`state/instagram-sync.*.log`.
+Drive Desktop placeholder, snapshots its private runtime and script under
+`~/Library/Application Support/Localgraph/`, and writes its plist under
+`~/Library/LaunchAgents/`. Every run appends a private audit record to
+`state/daily-import-runs.jsonl`; scheduler output stays under the internal
+Application Support log directory.
 
 The older `install-daily-import` command remains available when a single
 once-daily job should import both Instagram and iMessage. It is not the

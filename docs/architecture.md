@@ -65,7 +65,10 @@ an atomic `sources/instagram-current` symlink advances to the selected export.
 Provider, network, or partial-transfer failures retain the last completed
 pointer and mark `state/instagram-sync-status.json` degraded. The focused
 `instagram-sync` path imports and renders that pointer; a run-at-login and
-hourly macOS LaunchAgent provides a bounded freshness loop. The same
+hourly macOS LaunchAgent provides a bounded freshness loop. The scheduled
+workspace and a private runtime snapshot live under the internal
+`~/Library/Application Support/Localgraph/` boundary because macOS background
+privacy blocks reliable LaunchAgent access to removable-volume worktrees. The same
 `daily-import` path can
 also use Drive Desktop as a local source fallback: it resolves an explicit,
 configured, or shallow-discovered Instagram transfer folder, bootstraps all

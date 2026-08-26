@@ -24,6 +24,10 @@
       "criterion": "The Instagram-only macOS LaunchAgent checks hourly and at login without pinning an online-only Drive Desktop path."
     },
     {
+      "id": "test_automation.AutomationTests.test_instagram_sync_installer_rejects_a_removable_volume_workspace",
+      "criterion": "The scheduler cannot be installed against a removable-volume workspace that macOS background privacy will deny."
+    },
+    {
       "id": "test_automation.AutomationTests.test_exact_export_root_ignores_nested_spotlight_duplicates",
       "criterion": "macOS Spotlight results cannot split one exact export snapshot into duplicate nested import roots."
     },

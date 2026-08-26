@@ -262,12 +262,24 @@ class AutomationTests(unittest.TestCase):
 
             plist = plistlib.loads(Path(result["plist"]).read_bytes())
             script = Path(result["script"]).read_text(encoding="utf-8")
+            support = home / "Library" / "Application Support" / "Localgraph"
             self.assertEqual(plist["StartInterval"], 3600)
             self.assertTrue(plist["RunAtLoad"])
             self.assertEqual(plist["ProcessType"], "Background")
             self.assertNotIn("StartCalendarInterval", plist)
+            self.assertEqual(plist["WorkingDirectory"], str(support))
+            self.assertEqual(Path(result["script"]).parent, support / "bin")
+            self.assertTrue((support / "runtime" / "localgraph" / "automation.py").exists())
+            self.assertIn(str(support / "runtime"), script)
             self.assertIn("instagram-sync", script)
             self.assertNotIn("--instagram-drive-source", script)
+
+    def test_instagram_sync_installer_rejects_a_removable_volume_workspace(self) -> None:
+        """Catch launchd jobs being installed where macOS background privacy blocks the workspace."""
+        workspace = Workspace(Path("/Volumes/External/Localgraph"))
+
+        with self.assertRaisesRegex(ValueError, "Application Support"):
+            install_instagram_sync(workspace, dry_run=True, home=Path("/tmp/localgraph-home"))
 
 
 def run_cli(argv: list[str]) -> tuple[int, str]:

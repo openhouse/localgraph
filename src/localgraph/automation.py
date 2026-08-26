@@ -4,6 +4,7 @@ import json
 import os
 import plistlib
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -408,12 +409,24 @@ def install_instagram_sync(
 ) -> dict[str, object]:
     if not (5 <= interval_minutes <= 1440):
         raise ValueError("--interval-minutes must be between 5 and 1440")
+    workspace_root = workspace.root.expanduser().resolve()
+    if len(workspace_root.parts) > 1 and workspace_root.parts[1] == "Volumes":
+        raise ValueError(
+            "macOS launchd cannot reliably read a removable-volume workspace; "
+            "use a workspace under ~/Library/Application Support/Localgraph"
+        )
     workspace.ensure_workspace(force=False)
     home_dir = (home or Path.home()).expanduser()
-    script_path = workspace.state_dir / "bin" / "localgraph-instagram-sync.sh"
+    support_dir = home_dir / "Library" / "Application Support" / "Localgraph"
+    runtime_dir = support_dir / "runtime"
+    runtime_package = runtime_dir / "localgraph"
+    script_path = support_dir / "bin" / "localgraph-instagram-sync.sh"
+    log_dir = support_dir / "logs"
     plist_path = home_dir / "Library" / "LaunchAgents" / f"{label}.plist"
     script = instagram_sync_script(
         workspace,
+        runtime_dir=runtime_dir,
+        log_path=log_dir / "instagram-sync.log",
         me_name=me_name,
         me_instagram_names=me_instagram_names or [],
     )
@@ -421,19 +434,31 @@ def install_instagram_sync(
         label=label,
         script_path=script_path,
         interval_seconds=interval_minutes * 60,
-        workspace=workspace,
+        working_directory=support_dir,
+        log_dir=log_dir,
     )
 
     if not dry_run:
+        support_dir.mkdir(parents=True, exist_ok=True)
+        support_dir.chmod(0o700)
+        shutil.copytree(
+            Path(__file__).resolve().parent,
+            runtime_package,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
         script_path.parent.mkdir(parents=True, exist_ok=True)
         script_path.write_text(script, encoding="utf-8")
-        script_path.chmod(0o755)
+        script_path.chmod(0o700)
+        log_dir.mkdir(parents=True, exist_ok=True)
         plist_path.parent.mkdir(parents=True, exist_ok=True)
         plist_path.write_bytes(plistlib.dumps(plist, sort_keys=True))
 
     return {
         "label": label,
         "script": str(script_path),
+        "runtime": str(runtime_dir),
+        "workspace": str(workspace.root),
         "plist": str(plist_path),
         "intervalMinutes": interval_minutes,
         "runAtLoad": True,
@@ -495,11 +520,11 @@ def daily_import_script(
 def instagram_sync_script(
     workspace: Workspace,
     *,
+    runtime_dir: Path,
+    log_path: Path,
     me_name: str,
     me_instagram_names: list[str],
 ) -> str:
-    repo_root = Path(__file__).resolve().parents[2]
-    python_path = repo_root / "src"
     args = [
         sys.executable,
         "-m",
@@ -513,17 +538,14 @@ def instagram_sync_script(
     for value in me_instagram_names:
         args.extend(["--me-instagram", value])
 
-    exports = []
-    if (repo_root / "pyproject.toml").exists():
-        exports.append(f"export PYTHONPATH={shlex.quote(str(python_path))}:${{PYTHONPATH:-}}")
+    exports = [f"export PYTHONPATH={shlex.quote(str(runtime_dir))}:${{PYTHONPATH:-}}"]
     command = " ".join(shlex.quote(part) for part in args)
-    log_path = workspace.state_dir / "instagram-sync.launchd.log"
     return "\n".join(
         [
             "#!/bin/zsh",
             "set -euo pipefail",
             *exports,
-            f"mkdir -p {shlex.quote(str(workspace.state_dir))}",
+            f"mkdir -p {shlex.quote(str(workspace.state_dir))} {shlex.quote(str(log_path.parent))}",
             f"{command} >> {shlex.quote(str(log_path))} 2>&1",
             "",
         ]
@@ -549,7 +571,8 @@ def interval_launchd_plist(
     label: str,
     script_path: Path,
     interval_seconds: int,
-    workspace: Workspace,
+    working_directory: Path,
+    log_dir: Path,
 ) -> dict[str, object]:
     return {
         "Label": label,
@@ -558,9 +581,9 @@ def interval_launchd_plist(
         "RunAtLoad": True,
         "ProcessType": "Background",
         "ThrottleInterval": 60,
-        "StandardOutPath": str(workspace.state_dir / "instagram-sync.launchd.stdout.log"),
-        "StandardErrorPath": str(workspace.state_dir / "instagram-sync.launchd.stderr.log"),
-        "WorkingDirectory": str(workspace.root),
+        "StandardOutPath": str(log_dir / "instagram-sync.stdout.log"),
+        "StandardErrorPath": str(log_dir / "instagram-sync.stderr.log"),
+        "WorkingDirectory": str(working_directory),
     }
 
 
