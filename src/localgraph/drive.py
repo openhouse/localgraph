@@ -237,7 +237,10 @@ def pull_latest_instagram_export(
         selected_cache = cache_root / candidate.relative_path
         entry = entries.get(candidate.folder_id)
         if _completed_export_entry_is_valid(cache_root, candidate, entry):
-            result.completed_export_paths.append(selected_cache.resolve())
+            if not isinstance(entry, dict) or entry.get("status") != "no-message-files":
+                result.completed_export_paths.append(selected_cache.resolve())
+            else:
+                result.skipped += 1
             continue
         pulled = pull_google_drive_folder(
             workspace,
@@ -250,10 +253,6 @@ def pull_latest_instagram_export(
                 Path("messages"),
             ),
         )
-        if int(scan_instagram_source(selected_cache)["totalMessageFiles"]) <= 0:
-            raise DriveAPIError(
-                f"Drive export pull completed without Instagram message files: {candidate.name}"
-            )
         result.files_seen += pulled.files_seen
         result.folders_seen += pulled.folders_seen
         result.downloaded += pulled.downloaded
@@ -261,10 +260,23 @@ def pull_latest_instagram_export(
         result.skipped += pulled.skipped
         result.bytes_downloaded += pulled.bytes_downloaded
         result.warnings.extend(pulled.warnings)
+        if int(scan_instagram_source(selected_cache)["totalMessageFiles"]) <= 0:
+            entries[candidate.folder_id] = {
+                "folderId": candidate.folder_id,
+                "name": candidate.name,
+                "relativePath": candidate.relative_path.as_posix(),
+                "status": "no-message-files",
+                "checkedAt": _now_iso(),
+            }
+            registry.update({"containerFolderId": container_folder_id, "updatedAt": _now_iso()})
+            _write_json_private(registry_path, registry)
+            result.warnings.append(f"skipped Instagram export without message files: {candidate.name}")
+            continue
         entries[candidate.folder_id] = {
             "folderId": candidate.folder_id,
             "name": candidate.name,
             "relativePath": candidate.relative_path.as_posix(),
+            "status": "completed",
             "completedAt": _now_iso(),
         }
         registry.update({"containerFolderId": container_folder_id, "updatedAt": _now_iso()})
@@ -346,6 +358,8 @@ def completed_instagram_export_paths(workspace: Workspace) -> list[Path]:
     for entry in entries.values():
         if not isinstance(entry, dict):
             continue
+        if entry.get("status") == "no-message-files":
+            continue
         relative = entry.get("relativePath")
         if not isinstance(relative, str):
             continue
@@ -368,6 +382,8 @@ def _completed_export_entry_is_valid(
         return False
     if entry.get("relativePath") != candidate.relative_path.as_posix():
         return False
+    if entry.get("status") == "no-message-files":
+        return True
     export = cache_root / candidate.relative_path
     return int(scan_instagram_source(export)["totalMessageFiles"]) > 0
 

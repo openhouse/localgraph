@@ -156,6 +156,9 @@ private OAuth credential before subsequent provider requests. Drive metadata
 for sibling export and message folders is listed with bounded concurrency so
 large, mostly empty Meta directory skeletons do not serialize thousands of
 network round trips; file writes and canonical imports remain single-writer.
+Instagram packets that contain no message files are recorded as such and
+skipped on later runs; they do not invalidate or repeatedly delay the completed
+message packet chain.
 
 Freshness and historical completeness are separate. Until a one-time
 all-available-information export has completed, sync status reports

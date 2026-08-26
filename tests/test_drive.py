@@ -54,6 +54,40 @@ def message_payload() -> bytes:
 
 
 class DrivePullTests(unittest.TestCase):
+    def test_configured_sync_records_and_skips_exports_without_messages(self) -> None:
+        """Catch a legitimate non-message Instagram packet degrading the cumulative mirror."""
+        with tempfile.TemporaryDirectory() as tmp, fake_drive_api(
+            mixed_message_container_children,
+            mixed_message_container_payloads,
+        ):
+            root = Path(tmp) / "graph"
+            workspace = Workspace(root)
+            workspace.ensure_workspace(force=False)
+            write_token(workspace.state_dir / "google-drive-token.json")
+            code, _ = run_cli(["--root", str(root), "configure-drive-api", "--folder-id", "root"])
+            self.assertEqual(code, 0)
+
+            with patched_env("LOCALGRAPH_DRIVE_API_BASE_URL", FAKE_DRIVE_BASE_URL):
+                code, stdout = run_cli(
+                    ["--root", str(root), "instagram-sync", "--no-render", "--me-instagram", "Jamie"]
+                )
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["instagramSync"]["status"], "current")
+            self.assertEqual(payload["result"]["totals"]["messages"], 1)
+            registry = json.loads(
+                (workspace.state_dir / "instagram-drive-completed-exports.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(registry["exports"]), 2)
+            self.assertIn("no-message-files", {entry.get("status") for entry in registry["exports"].values()})
+
+            with patched_env("LOCALGRAPH_DRIVE_API_BASE_URL", FAKE_DRIVE_BASE_URL):
+                code, stdout = run_cli(
+                    ["--root", str(root), "instagram-sync", "--no-render", "--me-instagram", "Jamie"]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(stdout)["googleDrivePull"]["downloaded"], 0)
+
     def test_drive_pull_lists_sibling_folders_concurrently(self) -> None:
         """Catch a wide message skeleton turning one provider packet into an hour-long crawl."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -860,6 +894,39 @@ def incremental_message_payload(content: str, timestamp_ms: int) -> bytes:
             ],
         }
     ).encode("utf-8")
+
+
+def mixed_message_container_children() -> dict[str, list[dict[str, object]]]:
+    payload = message_payload()
+    return {
+        "root": [folder("folder-meta", "meta-2026-Aug-26-00-00-00")],
+        "folder-meta": [
+            folder("folder-export-message", "instagram-jamie-2026-08-24-message"),
+            folder("folder-export-empty", "instagram-jamie-2026-08-25-empty"),
+        ],
+        "folder-export-message": [folder("folder-activity-message", "your_instagram_activity")],
+        "folder-activity-message": [folder("folder-messages-message", "messages")],
+        "folder-messages-message": [folder("folder-inbox-message", "inbox")],
+        "folder-inbox-message": [folder("folder-thread-message", "alice_123")],
+        "folder-thread-message": [
+            {
+                "id": "file-message",
+                "name": "message_1.json",
+                "mimeType": "application/json",
+                "modifiedTime": "2026-08-24T12:00:00.000Z",
+                "size": str(len(payload)),
+                "md5Checksum": "message-fixture-md5",
+                "capabilities": {"canDownload": True},
+            }
+        ],
+        "folder-export-empty": [folder("folder-activity-empty", "your_instagram_activity")],
+        "folder-activity-empty": [folder("folder-messages-empty", "messages")],
+        "folder-messages-empty": [],
+    }
+
+
+def mixed_message_container_payloads() -> dict[str, bytes]:
+    return {"file-message": message_payload()}
 
 
 def message_scoped_container_children() -> dict[str, list[dict[str, object]]]:

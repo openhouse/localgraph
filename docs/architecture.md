@@ -68,7 +68,9 @@ and provider MD5 checksum match. Long transfers revalidate the OAuth token
 during traversal so an expiring access token is refreshed before the next
 provider request. Sibling Drive folders are listed with a bounded worker pool;
 downloads, manifest publication, and canonical state changes remain serialized
-under the workspace lock. After each successful pull, an atomic
+under the workspace lock. Provider packets with no message files are registered
+as message-empty so they neither degrade the cumulative mirror nor require the
+same directory traversal on every run. After each successful pull, an atomic
 `sources/instagram-current` symlink exposes the cumulative set of completed
 provider packets. Provider, network, or partial-transfer failures retain that
 last-known-good set and mark `state/instagram-sync-status.json` degraded. Meta

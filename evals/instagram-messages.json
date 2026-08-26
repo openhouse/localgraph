@@ -4,6 +4,10 @@
   "description": "Deterministic acquisition and integrity gates for private Instagram message imports.",
   "cases": [
     {
+      "id": "test_drive.DrivePullTests.test_configured_sync_records_and_skips_exports_without_messages",
+      "criterion": "A legitimate Instagram export packet with no message files is recorded and skipped without degrading completed message history or being retraversed forever."
+    },
+    {
       "id": "test_drive.DrivePullTests.test_drive_pull_lists_sibling_folders_concurrently",
       "criterion": "Wide provider message skeletons are enumerated with bounded sibling concurrency instead of one network round trip at a time."
     },
