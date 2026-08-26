@@ -13,6 +13,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -27,6 +29,7 @@ DRIVE_SCOPE_READONLY = "https://www.googleapis.com/auth/drive.readonly"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 COMPLETED_EXPORTS_REGISTRY_NAME = "instagram-drive-completed-exports.json"
+DRIVE_LIST_MAX_WORKERS = 12
 
 
 @dataclass
@@ -291,6 +294,7 @@ def _list_instagram_exports(
 ) -> list[InstagramExportFolder]:
     children = _list_drive_children(base_url, access_token, container_folder_id)
     candidates: list[InstagramExportFolder] = []
+    meta_folders: list[tuple[str, Path]] = []
     for item in children:
         if str(item.get("mimeType") or "") != DRIVE_FOLDER_MIME_TYPE:
             continue
@@ -301,7 +305,13 @@ def _list_instagram_exports(
             continue
         if not name.startswith("meta-") or not folder_id:
             continue
-        for export in _list_drive_children(base_url, access_token, folder_id):
+        meta_folders.append((folder_id, Path(_safe_drive_name(name))))
+    for _, relative_meta, exports in _list_drive_children_for_folders(
+        base_url,
+        lambda: access_token,
+        meta_folders,
+    ):
+        for export in exports:
             export_name = str(export.get("name") or "")
             export_id = str(export.get("id") or "")
             if (
@@ -313,7 +323,7 @@ def _list_instagram_exports(
                     InstagramExportFolder(
                         export_id,
                         export_name,
-                        Path(_safe_drive_name(name)) / _safe_drive_name(export_name),
+                        relative_meta / _safe_drive_name(export_name),
                     )
                 )
     if not candidates:
@@ -395,62 +405,73 @@ def pull_google_drive_folder(
     def current_access_token() -> str:
         return _valid_access_token(token_source, token)
 
-    def recurse(parent_id: str, relative_dir: Path) -> None:
-        children = _list_drive_children(base_url, current_access_token(), parent_id)
-        for item in children:
-            name = str(item.get("name") or item.get("id") or "unnamed")
-            mime_type = str(item.get("mimeType") or "")
-            relative_path = relative_dir / _safe_drive_name(name)
-            if mime_type == DRIVE_FOLDER_MIME_TYPE:
-                if allowed_relative_roots is not None and not _path_intersects_allowed_roots(
-                    relative_path,
-                    allowed_relative_roots,
+    visited_folder_ids = {folder_id}
+    frontier = [(folder_id, Path())]
+    while frontier:
+        next_frontier: list[tuple[str, Path]] = []
+        for _, relative_dir, children in _list_drive_children_for_folders(
+            base_url,
+            current_access_token,
+            frontier,
+        ):
+            for item in children:
+                name = str(item.get("name") or item.get("id") or "unnamed")
+                item_id = str(item.get("id") or "")
+                mime_type = str(item.get("mimeType") or "")
+                relative_path = relative_dir / _safe_drive_name(name)
+                if mime_type == DRIVE_FOLDER_MIME_TYPE:
+                    if allowed_relative_roots is not None and not _path_intersects_allowed_roots(
+                        relative_path,
+                        allowed_relative_roots,
+                    ):
+                        result.skipped += 1
+                        continue
+                    if not item_id or item_id in visited_folder_ids:
+                        result.skipped += 1
+                        continue
+                    visited_folder_ids.add(item_id)
+                    result.folders_seen += 1
+                    next_frontier.append((item_id, relative_path))
+                    continue
+                if allowed_relative_roots is not None and not any(
+                    relative_path.is_relative_to(root) for root in allowed_relative_roots
                 ):
                     result.skipped += 1
                     continue
-                result.folders_seen += 1
-                recurse(str(item["id"]), relative_path)
-                continue
-            if allowed_relative_roots is not None and not any(
-                relative_path.is_relative_to(root) for root in allowed_relative_roots
-            ):
-                result.skipped += 1
-                continue
-            if mime_type.startswith("application/vnd.google-apps."):
-                result.skipped += 1
-                result.warnings.append(f"skipped unsupported Google Workspace file: {relative_dir / name}")
-                continue
-            capabilities = item.get("capabilities")
-            if isinstance(capabilities, dict) and capabilities.get("canDownload") is False:
-                result.skipped += 1
-                result.warnings.append(f"skipped non-downloadable file: {relative_dir / name}")
-                continue
-            result.files_seen += 1
-            target = _unique_target(cache_root, relative_path, str(item["id"]), used_paths)
-            manifest_entry = manifest["files"].get(str(item["id"]), {})  # type: ignore[index]
-            if _is_unchanged(target, item, manifest_entry):
-                result.unchanged += 1
-                continue
-            downloaded = _download_drive_file(
-                base_url,
-                current_access_token(),
-                str(item["id"]),
-                target,
-            )
-            result.downloaded += 1
-            result.bytes_downloaded += downloaded
-            manifest["files"][str(item["id"])] = {
-                "id": item.get("id"),
-                "name": item.get("name"),
-                "mimeType": item.get("mimeType"),
-                "modifiedTime": item.get("modifiedTime"),
-                "size": item.get("size"),
-                "md5Checksum": item.get("md5Checksum"),
-                "relativePath": target.relative_to(cache_root).as_posix(),
-                "downloadedAt": _now_iso(),
-            }
-
-    recurse(folder_id, Path())
+                if mime_type.startswith("application/vnd.google-apps."):
+                    result.skipped += 1
+                    result.warnings.append(f"skipped unsupported Google Workspace file: {relative_dir / name}")
+                    continue
+                capabilities = item.get("capabilities")
+                if isinstance(capabilities, dict) and capabilities.get("canDownload") is False:
+                    result.skipped += 1
+                    result.warnings.append(f"skipped non-downloadable file: {relative_dir / name}")
+                    continue
+                result.files_seen += 1
+                target = _unique_target(cache_root, relative_path, item_id, used_paths)
+                manifest_entry = manifest["files"].get(item_id, {})  # type: ignore[index]
+                if _is_unchanged(target, item, manifest_entry):
+                    result.unchanged += 1
+                    continue
+                downloaded = _download_drive_file(
+                    base_url,
+                    current_access_token(),
+                    item_id,
+                    target,
+                )
+                result.downloaded += 1
+                result.bytes_downloaded += downloaded
+                manifest["files"][item_id] = {
+                    "id": item.get("id"),
+                    "name": item.get("name"),
+                    "mimeType": item.get("mimeType"),
+                    "modifiedTime": item.get("modifiedTime"),
+                    "size": item.get("size"),
+                    "md5Checksum": item.get("md5Checksum"),
+                    "relativePath": target.relative_to(cache_root).as_posix(),
+                    "downloadedAt": _now_iso(),
+                }
+        frontier = next_frontier
     manifest.update({"folderId": folder_id, "cachePath": str(cache_root), "updatedAt": _now_iso()})
     _write_json_private(manifest_path, manifest)
     return result
@@ -510,6 +531,30 @@ def _list_drive_children(base_url: str, access_token: str, parent_id: str) -> li
         page_token = payload.get("nextPageToken") if isinstance(payload.get("nextPageToken"), str) else None
         if not page_token:
             return files
+
+
+def _list_drive_children_for_folders(
+    base_url: str,
+    access_token_for_request: Callable[[], str],
+    folders: list[tuple[str, Path]],
+) -> list[tuple[str, Path, list[dict[str, object]]]]:
+    if not folders:
+        return []
+    workers = min(DRIVE_LIST_MAX_WORKERS, len(folders))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="localgraph-drive-list") as executor:
+        futures = [
+            executor.submit(
+                _list_drive_children,
+                base_url,
+                access_token_for_request(),
+                folder_id,
+            )
+            for folder_id, _ in folders
+        ]
+        return [
+            (folder_id, relative_path, future.result())
+            for (folder_id, relative_path), future in zip(folders, futures, strict=True)
+        ]
 
 
 def _download_drive_file(base_url: str, access_token: str, file_id: str, target: Path) -> int:

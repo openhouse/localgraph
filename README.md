@@ -152,7 +152,10 @@ concurrently; a second invocation exits successfully with
 `status: skipped-concurrent`. A retry reuses private files whose size and
 provider MD5 checksum already match, then resumes the message-only pull. Long
 historical transfers recheck token lifetime during traversal and refresh the
-private OAuth credential before subsequent provider requests.
+private OAuth credential before subsequent provider requests. Drive metadata
+for sibling export and message folders is listed with bounded concurrency so
+large, mostly empty Meta directory skeletons do not serialize thousands of
+network round trips; file writes and canonical imports remain single-writer.
 
 Freshness and historical completeness are separate. Until a one-time
 all-available-information export has completed, sync status reports

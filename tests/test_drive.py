@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import tempfile
+import threading
 import time
 import unittest
 import urllib.parse
@@ -19,6 +20,7 @@ from localgraph.drive import (
     DRIVE_SCOPE_READONLY,
     _authorization_url,
     _is_unchanged,
+    _list_instagram_exports,
     configure_google_drive_api,
     pull_google_drive_folder,
 )
@@ -52,6 +54,64 @@ def message_payload() -> bytes:
 
 
 class DrivePullTests(unittest.TestCase):
+    def test_drive_pull_lists_sibling_folders_concurrently(self) -> None:
+        """Catch a wide message skeleton turning one provider packet into an hour-long crawl."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Workspace(Path(tmp) / "graph")
+            token_path = workspace.state_dir / "google-drive-token.json"
+            write_token(token_path)
+            lock = threading.Lock()
+            active = 0
+            maximum_active = 0
+
+            def list_children(_base_url: str, _token: str, parent_id: str) -> list[dict[str, object]]:
+                nonlocal active, maximum_active
+                if parent_id == "root":
+                    return [folder("folder-a", "a"), folder("folder-b", "b")]
+                with lock:
+                    active += 1
+                    maximum_active = max(maximum_active, active)
+                time.sleep(0.05)
+                with lock:
+                    active -= 1
+                return []
+
+            with mock.patch("localgraph.drive._list_drive_children", side_effect=list_children):
+                result = pull_google_drive_folder(
+                    workspace,
+                    folder_id="root",
+                    token_path=token_path,
+                    api_base_url=FAKE_DRIVE_BASE_URL,
+                )
+
+            self.assertEqual(result.folders_seen, 2)
+            self.assertGreaterEqual(maximum_active, 2)
+
+    def test_drive_export_discovery_lists_meta_folders_concurrently(self) -> None:
+        """Catch a stable container with many dated Meta folders becoming a serial bottleneck."""
+        lock = threading.Lock()
+        active = 0
+        maximum_active = 0
+
+        def list_children(_base_url: str, _token: str, parent_id: str) -> list[dict[str, object]]:
+            nonlocal active, maximum_active
+            if parent_id == "root":
+                return [folder("meta-a", "meta-a"), folder("meta-b", "meta-b")]
+            with lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            suffix = "24" if parent_id == "meta-a" else "25"
+            return [folder(f"export-{suffix}", f"instagram-jamie-2026-08-{suffix}")]
+
+        with mock.patch("localgraph.drive._list_drive_children", side_effect=list_children):
+            exports = _list_instagram_exports(FAKE_DRIVE_BASE_URL, "token", "root")
+
+        self.assertEqual(len(exports), 2)
+        self.assertGreaterEqual(maximum_active, 2)
+
     def test_long_drive_pull_rechecks_refreshable_token_during_traversal(self) -> None:
         """Catch a baseline transfer failing when its initial access token expires mid-run."""
         with tempfile.TemporaryDirectory() as tmp:
