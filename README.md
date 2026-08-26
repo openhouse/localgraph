@@ -150,7 +150,9 @@ and never publishes a partial cache folder. A private workspace lock prevents
 manual and scheduled `instagram-sync` runs from writing the same cache
 concurrently; a second invocation exits successfully with
 `status: skipped-concurrent`. A retry reuses private files whose size and
-provider MD5 checksum already match, then resumes the message-only pull.
+provider MD5 checksum already match, then resumes the message-only pull. Long
+historical transfers recheck token lifetime during traversal and refresh the
+private OAuth credential before subsequent provider requests.
 
 Freshness and historical completeness are separate. Until a one-time
 all-available-information export has completed, sync status reports

@@ -52,6 +52,42 @@ def message_payload() -> bytes:
 
 
 class DrivePullTests(unittest.TestCase):
+    def test_long_drive_pull_rechecks_refreshable_token_during_traversal(self) -> None:
+        """Catch a baseline transfer failing when its initial access token expires mid-run."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Workspace(Path(tmp) / "graph")
+            token_path = workspace.state_dir / "google-drive-token.json"
+            write_token(token_path)
+            token_checks = 0
+            requests = 0
+
+            def current_token(*_args: object, **_kwargs: object) -> str:
+                nonlocal token_checks
+                token_checks += 1
+                return "initial-token" if token_checks == 1 else "refreshed-token"
+
+            def expiring_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+                nonlocal requests
+                requests += 1
+                authorization = request.get_header("Authorization")  # type: ignore[attr-defined]
+                if requests > 1 and authorization != "Bearer refreshed-token":
+                    raise AssertionError("Drive request reused an expired access token")
+                return fake_urlopen(request, timeout=timeout)
+
+            with (
+                mock.patch("localgraph.drive._valid_access_token", side_effect=current_token),
+                mock.patch("localgraph.drive.urllib.request.urlopen", side_effect=expiring_urlopen),
+            ):
+                result = pull_google_drive_folder(
+                    workspace,
+                    folder_id="root",
+                    token_path=token_path,
+                    api_base_url=FAKE_DRIVE_BASE_URL,
+                )
+
+            self.assertEqual(result.downloaded, 1)
+            self.assertGreater(token_checks, 1)
+
     def test_interrupted_pull_reuses_a_checksum_verified_private_file(self) -> None:
         """Catch a safe restart redownloading files that already completed before interruption."""
         with tempfile.TemporaryDirectory() as tmp:

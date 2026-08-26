@@ -64,7 +64,9 @@ completed, and downloads only those private subtrees into
 `sources/instagram-drive-cache/`. Traversal is further bounded to each export's
 message subtree; unrelated account-export sections are neither listed
 recursively nor downloaded. Interrupted files are reused only after their size
-and provider MD5 checksum match. After each successful pull, an atomic
+and provider MD5 checksum match. Long transfers revalidate the OAuth token
+during traversal so an expiring access token is refreshed before the next
+provider request. After each successful pull, an atomic
 `sources/instagram-current` symlink exposes the cumulative set of completed
 provider packets. Provider, network, or partial-transfer failures retain that
 last-known-good set and mark `state/instagram-sync-status.json` degraded. Meta

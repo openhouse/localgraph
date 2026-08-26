@@ -388,13 +388,15 @@ def pull_google_drive_folder(
         manifest["files"] = {}
 
     token = _load_token(token_source)
-    access_token = _valid_access_token(token_source, token)
     base_url = api_base_url or os.environ.get("LOCALGRAPH_DRIVE_API_BASE_URL", DRIVE_API_BASE_URL)
     result = DrivePullResult(folder_id=folder_id, cache_path=cache_root, manifest_path=manifest_path)
     used_paths: dict[Path, str] = {}
 
+    def current_access_token() -> str:
+        return _valid_access_token(token_source, token)
+
     def recurse(parent_id: str, relative_dir: Path) -> None:
-        children = _list_drive_children(base_url, access_token, parent_id)
+        children = _list_drive_children(base_url, current_access_token(), parent_id)
         for item in children:
             name = str(item.get("name") or item.get("id") or "unnamed")
             mime_type = str(item.get("mimeType") or "")
@@ -429,7 +431,12 @@ def pull_google_drive_folder(
             if _is_unchanged(target, item, manifest_entry):
                 result.unchanged += 1
                 continue
-            downloaded = _download_drive_file(base_url, access_token, str(item["id"]), target)
+            downloaded = _download_drive_file(
+                base_url,
+                current_access_token(),
+                str(item["id"]),
+                target,
+            )
             result.downloaded += 1
             result.bytes_downloaded += downloaded
             manifest["files"][str(item["id"])] = {

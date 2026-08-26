@@ -4,6 +4,10 @@
   "description": "Deterministic acquisition and integrity gates for private Instagram message imports.",
   "cases": [
     {
+      "id": "test_drive.DrivePullTests.test_long_drive_pull_rechecks_refreshable_token_during_traversal",
+      "criterion": "A historical Drive transfer that outlives its initial access token refreshes credentials during traversal instead of degrading after partial progress."
+    },
+    {
       "id": "test_drive.DrivePullTests.test_oauth_authorization_contract_is_offline_pkce_and_drive_readonly",
       "criterion": "Google authorization remains refreshable for unattended checks, protected by PKCE and state, and limited to the read-only Drive scope."
     },
