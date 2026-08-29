@@ -26,6 +26,26 @@ from localgraph.paths import Workspace
 
 
 class AutomationTests(unittest.TestCase):
+    def test_multi_account_launchagent_reads_accounts_from_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Workspace(Path(tmp) / "graph")
+            home = Path(tmp) / "home"
+            configure_test_accounts(workspace)
+
+            result = install_instagram_sync(
+                workspace,
+                interval_minutes=60,
+                me_name="Jamie",
+                me_instagram_names=["stale-hard-coded-account"],
+                label="com.example.localgraph.instagram-sync",
+                home=home,
+            )
+
+            script = Path(result["script"]).read_text(encoding="utf-8")
+            self.assertIn("instagram-sync", script)
+            self.assertNotIn("--me-instagram", script)
+            self.assertNotIn("stale-hard-coded-account", script)
+
     def test_multi_account_sync_preserves_projection_until_every_account_has_a_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Workspace(Path(tmp) / "graph")

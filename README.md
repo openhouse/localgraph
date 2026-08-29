@@ -71,6 +71,32 @@ and renders views. `daily-import` remains the combined Instagram and iMessage pa
 filesystem views from canonical SQLite state and writes
 `_system/source-manifest.json`.
 
+For more than one Instagram profile, configure an explicit account registry.
+The first command adopts a working singleton archive in place; later profiles
+receive isolated cache and state paths while reusing the same read-only Drive
+authorization when appropriate:
+
+```bash
+python -m localgraph --root ~/Localgraph configure-instagram-account \
+  --account jamieburkart --profile-name jamieburkart \
+  --owner-display-name "Jamie Burkart" --owner-kind person \
+  --self-name "Jamie Burkart" --adopt-legacy --primary
+
+python -m localgraph --root ~/Localgraph configure-instagram-account \
+  --account nycartc --profile-name nycartc \
+  --owner-display-name "NYC Artists' Coalition" --owner-kind organization \
+  --self-name nycartc --reuse-primary-drive
+
+python -m localgraph --root ~/Localgraph instagram-accounts
+```
+
+The account key namespaces provider thread paths, so identical paths from two
+profiles cannot merge. Personal and organizational exporting identities also
+remain distinct. One scheduler prepares every account, then replaces the shared
+Instagram projection only when every configured account has a usable current
+source. See [Multi-account Instagram ingestion](docs/multi-instagram-accounts.md)
+for the complete custody, failure, and migration model.
+
 Default private import locations:
 
 ```text
@@ -168,7 +194,8 @@ it as the baseline:
 
 ```bash
 python -m localgraph --root "$HOME/Library/Application Support/Localgraph/workspace" \
-  configure-instagram-baseline --export-name "instagram-ACCOUNT-YYYY-MM-DD-SUFFIX"
+  configure-instagram-baseline --account ACCOUNT \
+  --export-name "instagram-ACCOUNT-YYYY-MM-DD-SUFFIX"
 ```
 
 Only then does `state/instagram-sync-status.json` report
@@ -242,6 +269,7 @@ Thread views include `index.md` metadata and `messages.md` transcripts under:
 ```text
 views/threads/instagram/<thread>/
 views/threads/imessage/<thread>/
+views/instagram-accounts/<account>/threads/  # links into that account's Instagram threads
 ```
 
 Person views are designed as portable context capsules. A person directory can
@@ -279,7 +307,9 @@ contract, bounded cumulative-export selection, explicit baseline completeness,
 atomic completed-mirror publication, cumulative source replacement, stale
 generated-view reconciliation, last-known-good fallback, hourly scheduling,
 authenticated acquisition precedence, overlapping-export deduplication,
-single-writer synchronization, canonical import and rendering, and repository
+single-writer synchronization, account-scoped packet selection and state,
+atomic multi-account rebuilds, person/organization owner separation,
+account-specific baseline claims, canonical import and rendering, and repository
 workspace compatibility. It
 never uses private message bodies as committed fixtures.
 

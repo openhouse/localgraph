@@ -4,6 +4,10 @@
   "description": "Deterministic acquisition and integrity gates for private Instagram message imports.",
   "cases": [
     {
+      "id": "test_automation.AutomationTests.test_multi_account_launchagent_reads_accounts_from_config",
+      "criterion": "The single hourly scheduler reads the live account registry instead of embedding a stale or private account list in its launch command."
+    },
+    {
       "id": "test_cli.CliTests.test_instagram_accounts_status_lists_profiles_and_health_without_message_data",
       "criterion": "Operators can list configured Instagram profiles and body-free health state without reading or emitting private message content."
     },

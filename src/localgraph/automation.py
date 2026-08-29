@@ -814,7 +814,7 @@ def install_instagram_sync(
         runtime_dir=runtime_dir,
         log_path=log_dir / "instagram-sync.log",
         me_name=me_name,
-        me_instagram_names=me_instagram_names or [],
+        me_instagram_names=[] if instagram_accounts(workspace) else (me_instagram_names or []),
     )
     plist = interval_launchd_plist(
         label=label,

@@ -84,6 +84,7 @@ def configure_instagram_account(
         raise ValueError("imports.instagram.accounts configuration must be an object")
 
     primary_key = str(instagram.get("primaryAccountKey") or "") or None
+    is_primary = primary or primary_key == key or primary_key is None
     if reuse_primary_drive:
         if not primary_key or not isinstance(accounts.get(primary_key), dict):
             raise ValueError("cannot reuse primary Drive settings before a primary account is configured")
@@ -100,8 +101,8 @@ def configure_instagram_account(
         "exportNamePrefix": export_name_prefix or f"instagram-{profile}-",
         "ownerDisplayName": owner_display_name.strip(),
         "ownerKind": owner_kind,
-        "ownerIdentityKey": "person:self" if primary and owner_kind == "person" else f"{owner_kind}:instagram:{key}",
-        "selfNames": _unique_names([profile, *self_names]),
+        "ownerIdentityKey": "person:self" if is_primary and owner_kind == "person" else f"{owner_kind}:instagram:{key}",
+        "selfNames": _unique_names([profile, owner_display_name, *self_names]),
         "enabled": True,
         **defaults,
     }
@@ -121,7 +122,7 @@ def configure_instagram_account(
             if value:
                 record[field] = value
     accounts[key] = record
-    if primary or not primary_key:
+    if is_primary:
         instagram["primaryAccountKey"] = key
         if owner_kind == "person":
             record["ownerIdentityKey"] = "person:self"

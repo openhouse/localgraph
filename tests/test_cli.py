@@ -115,6 +115,31 @@ class CliTests(unittest.TestCase):
             self.assertEqual(nycartc["exportNamePrefix"], "instagram-nycartc-")
             self.assertEqual(nycartc["ownerKind"], "organization")
 
+            code, _ = run_cli(
+                [
+                    "--root",
+                    str(root),
+                    "configure-instagram-account",
+                    "--account",
+                    "jamieburkart",
+                    "--profile-name",
+                    "jamieburkart",
+                    "--owner-display-name",
+                    "Jamie Burkart",
+                    "--owner-kind",
+                    "person",
+                    "--self-name",
+                    "Jamie",
+                    "--adopt-legacy",
+                ]
+            )
+            self.assertEqual(code, 0)
+            updated = json.loads((root / "localgraph.config.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                updated["imports"]["instagram"]["accounts"]["jamieburkart"]["ownerIdentityKey"],
+                "person:self",
+            )
+
     def test_init_accepts_repository_eval_and_script_entries(self) -> None:
         """Catch repository-owned eval tooling making the project root fail workspace validation."""
         with tempfile.TemporaryDirectory() as tmp:
