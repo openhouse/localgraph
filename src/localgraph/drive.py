@@ -507,7 +507,7 @@ def _list_instagram_exports(
                 )
     if not candidates:
         raise DriveAPIError(
-            "configured Google Drive container has no matching direct instagram-* exports or meta-*/instagram-* exports"
+            "configured Google Drive container has no matching dated Meta exports for the configured account prefix"
         )
     return sorted(
         candidates,

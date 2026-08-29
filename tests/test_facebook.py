@@ -387,6 +387,21 @@ class FacebookTests(unittest.TestCase):
                 "complete-through-latest-export",
             )
 
+    def test_shared_drive_discovery_error_is_source_neutral(self) -> None:
+        from localgraph.drive import DriveAPIError, _list_instagram_exports
+
+        with mock.patch("localgraph.drive._list_drive_children", return_value=[]):
+            with self.assertRaises(DriveAPIError) as raised:
+                _list_instagram_exports(
+                    "https://drive.example/drive/v3",
+                    "token",
+                    "root",
+                    export_name_prefix="facebook-example-person-",
+                )
+
+        self.assertIn("Meta exports", str(raised.exception))
+        self.assertNotIn("instagram", str(raised.exception).lower())
+
 
 def run_cli(arguments: list[str]) -> tuple[int, str]:
     stream = io.StringIO()
