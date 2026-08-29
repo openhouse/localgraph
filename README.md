@@ -3,7 +3,7 @@
 Localgraph is a local-first correspondence graph for private source texts,
 conversation archives, annotations, and project-specific views.
 
-The project starts from Instagram and iMessage exports, but the core idea is
+The project starts from Instagram, Facebook, and iMessage exports, but the core idea is
 broader: preserve full source texts, normalize them into a local store, and
 generate filesystem-native views that can be symlinked into other projects.
 
@@ -41,6 +41,7 @@ parts of the first scaffold family:
 - a SQLite-first canonical state model;
 - an explicit private-root and filesystem-view contract;
 - body-safe Instagram transfer scanning;
+- body-safe Facebook profile and managed Page packet scanning;
 - deterministic symlink-friendly view paths.
 
 ```bash
@@ -52,6 +53,7 @@ python -m localgraph --root ~/Localgraph import --me "Jamie Burkart" --render
 python -m localgraph --root ~/Localgraph drive-pull
 python -m localgraph --root ~/Localgraph daily-import --me "Jamie Burkart"
 python -m localgraph --root ~/Localgraph instagram-sync --me "Jamie Burkart"
+python -m localgraph --root ~/Localgraph facebook-sync
 python -m localgraph --root ~/Localgraph render
 python -m localgraph --root ~/Localgraph view-name person "Alice Example" "instagram:alice"
 ```
@@ -67,6 +69,9 @@ accumulates completed `instagram-*` packets under a stable Drive container,
 publishes their cumulative set through the stable `sources/instagram-current`
 directory symlink, imports it, records freshness and history-coverage state,
 and renders views. `daily-import` remains the combined Instagram and iMessage path.
+`facebook-sync` independently refreshes every ready Facebook profile or managed
+Page packet, preserves pending accounts, and renders account-scoped Facebook
+thread entry points.
 `render` builds deterministic
 filesystem views from canonical SQLite state and writes
 `_system/source-manifest.json`.
@@ -99,10 +104,18 @@ Instagram projection only when every configured account has a usable current
 source. See [Multi-account Instagram ingestion](docs/multi-instagram-accounts.md)
 for the complete custody, failure, and migration model.
 
+Facebook profiles and managed Pages use a sibling private registry. Personal
+profiles can reuse the same read-only Drive container authorization, while Page
+records remain provider-verification-required until the Page's own settings
+prove the available Messages export and recurrence controls. See
+[Facebook profile and managed Page messages](docs/facebook-messages.md).
+
 Default private import locations:
 
 ```text
 sources/instagram/          # Meta/Instagram export folders
+sources/facebook/           # unassigned Meta/Facebook export folders
+sources/facebook-accounts/  # per-profile and per-Page private packets
 sources/imessage/chat.db    # copied macOS Messages database
 ```
 
@@ -270,8 +283,10 @@ Thread views include `index.md` metadata and `messages.md` transcripts under:
 
 ```text
 views/threads/instagram/<thread>/
+views/threads/facebook/<thread>/
 views/threads/imessage/<thread>/
 views/instagram-accounts/<account>/threads/  # links into that account's Instagram threads
+views/facebook-accounts/<account>/threads/   # links into that profile or Page's threads
 ```
 
 Person views are designed as portable context capsules. A person directory can
@@ -302,9 +317,9 @@ views/people/alice-example--3a1f0d22/
 `notes.md` is user-authored and preserved across renders. The other files are
 generated orientation, navigation, provenance, and transcript-link material.
 
-## Instagram Evals and Hill Climb
+## Meta Message Evals and Hill Climb
 
-The deterministic Instagram suite covers the offline PKCE and read-only OAuth
+The deterministic Instagram and Facebook suites cover the offline PKCE and read-only OAuth
 contract, bounded cumulative-export selection, explicit baseline completeness,
 atomic completed-mirror publication, cumulative source replacement, stale
 generated-view reconciliation, last-known-good fallback, hourly scheduling,
@@ -312,7 +327,9 @@ authenticated acquisition precedence, overlapping-export deduplication,
 single-writer synchronization, account-scoped packet selection and state,
 atomic multi-account rebuilds, person/organization owner separation,
 account-specific baseline claims, canonical import and rendering, and repository
-workspace compatibility. It
+workspace compatibility. The Facebook suite additionally verifies profile/Page
+identity separation, body-free registry status, independent pending-account
+semantics, Messages-only Drive scope, and hourly private-registry scheduling. It
 never uses private message bodies as committed fixtures.
 
 ```bash

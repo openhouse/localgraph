@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .facebook import scan_facebook_source
+from .facebook_accounts import facebook_account
 from .instagram import scan_instagram_source
 from .instagram_accounts import instagram_account
 from .paths import Workspace
@@ -214,6 +216,29 @@ def pull_configured_google_drive_source(
     )
 
 
+def pull_configured_facebook_source(
+    workspace: Workspace,
+    *,
+    account_key: str,
+) -> DrivePullResult | None:
+    account = facebook_account(workspace, account_key)
+    if not account.google_drive_folder_id:
+        return None
+    return pull_latest_facebook_export(
+        workspace,
+        container_folder_id=account.google_drive_folder_id,
+        cache_dir=account.google_drive_cache_path,
+        token_path=account.google_drive_token_path,
+        export_name_prefix=account.export_name_prefix,
+        registry_path=account.completed_exports_registry_path,
+        manifest_path=account.pull_manifest_path,
+        allowed_relative_roots=(
+            Path("your_facebook_activity/messages"),
+            Path("messages"),
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class InstagramExportFolder:
     folder_id: str
@@ -317,6 +342,112 @@ def pull_latest_instagram_export(
     result.selected_export_ids = [candidate.folder_id for candidate in candidates]
     result.selected_export_names = [candidate.name for candidate in candidates]
     return result
+
+
+def pull_latest_facebook_export(
+    workspace: Workspace,
+    *,
+    container_folder_id: str,
+    cache_dir: Path,
+    token_path: Path,
+    export_name_prefix: str,
+    registry_path: Path,
+    manifest_path: Path,
+    allowed_relative_roots: tuple[Path, ...],
+    api_base_url: str | None = None,
+) -> DrivePullResult:
+    """Pull all completed Facebook message packets matching one account prefix."""
+    workspace.ensure_workspace(force=False)
+    token = _load_token(token_path)
+    access_token = _valid_access_token(token_path, token)
+    base_url = api_base_url or os.environ.get("LOCALGRAPH_DRIVE_API_BASE_URL", DRIVE_API_BASE_URL)
+    candidates = _list_instagram_exports(
+        base_url,
+        access_token,
+        container_folder_id,
+        export_name_prefix=export_name_prefix,
+    )
+    selected = candidates[-1]
+    registry = _load_json(registry_path, default={"exports": {}})
+    if not isinstance(registry, dict):
+        registry = {"exports": {}}
+    entries = registry.get("exports")
+    if not isinstance(entries, dict):
+        entries = {}
+        registry["exports"] = entries
+
+    result = DrivePullResult(
+        folder_id=selected.folder_id,
+        cache_path=cache_dir / selected.relative_path,
+        manifest_path=manifest_path,
+    )
+    for candidate in candidates:
+        selected_cache = cache_dir / candidate.relative_path
+        entry = entries.get(candidate.folder_id)
+        if _completed_facebook_export_entry_is_valid(cache_dir, candidate, entry):
+            if not isinstance(entry, dict) or entry.get("status") != "no-message-files":
+                result.completed_export_paths.append(selected_cache.resolve())
+            else:
+                result.skipped += 1
+            continue
+        pulled = pull_google_drive_folder(
+            workspace,
+            folder_id=candidate.folder_id,
+            cache_dir=selected_cache,
+            token_path=token_path,
+            api_base_url=base_url,
+            manifest_path=manifest_path,
+            allowed_relative_roots=allowed_relative_roots,
+        )
+        result.files_seen += pulled.files_seen
+        result.folders_seen += pulled.folders_seen
+        result.downloaded += pulled.downloaded
+        result.unchanged += pulled.unchanged
+        result.skipped += pulled.skipped
+        result.bytes_downloaded += pulled.bytes_downloaded
+        result.warnings.extend(pulled.warnings)
+        if int(scan_facebook_source(selected_cache)["totalMessageFiles"]) <= 0:
+            entries[candidate.folder_id] = {
+                "folderId": candidate.folder_id,
+                "name": candidate.name,
+                "relativePath": candidate.relative_path.as_posix(),
+                "status": "no-message-files",
+                "checkedAt": _now_iso(),
+            }
+            result.warnings.append(f"skipped Facebook export without message files: {candidate.name}")
+        else:
+            entries[candidate.folder_id] = {
+                "folderId": candidate.folder_id,
+                "name": candidate.name,
+                "relativePath": candidate.relative_path.as_posix(),
+                "status": "completed",
+                "completedAt": _now_iso(),
+            }
+            result.completed_export_paths.append(selected_cache.resolve())
+        registry.update({"containerFolderId": container_folder_id, "updatedAt": _now_iso()})
+        _write_json_private(registry_path, registry)
+
+    result.configured_folder_id = container_folder_id
+    result.selected_export_id = selected.folder_id
+    result.selected_export_name = selected.name
+    result.selected_export_ids = [candidate.folder_id for candidate in candidates]
+    result.selected_export_names = [candidate.name for candidate in candidates]
+    return result
+
+
+def _completed_facebook_export_entry_is_valid(
+    cache_root: Path,
+    candidate: InstagramExportFolder,
+    entry: object,
+) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("relativePath") != candidate.relative_path.as_posix():
+        return False
+    if entry.get("status") == "no-message-files":
+        return True
+    export = cache_root / candidate.relative_path
+    return int(scan_facebook_source(export)["totalMessageFiles"]) > 0
 
 
 def _select_latest_instagram_export(
