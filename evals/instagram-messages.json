@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "suite": "instagram-messages",
+  "description": "Deterministic acquisition and integrity gates for private Instagram message imports.",
+  "cases": [
+    {
+      "id": "test_drive.DrivePullTests.test_configured_sync_records_and_skips_exports_without_messages",
+      "criterion": "A legitimate Instagram export packet with no message files is recorded and skipped without degrading completed message history or being retraversed forever."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_drive_pull_lists_sibling_folders_concurrently",
+      "criterion": "Wide provider message skeletons are enumerated with bounded sibling concurrency instead of one network round trip at a time."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_drive_export_discovery_lists_meta_folders_concurrently",
+      "criterion": "A stable container with many dated Meta folders discovers Instagram export packets with bounded sibling concurrency."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_long_drive_pull_rechecks_refreshable_token_during_traversal",
+      "criterion": "A historical Drive transfer that outlives its initial access token refreshes credentials during traversal instead of degrading after partial progress."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_oauth_authorization_contract_is_offline_pkce_and_drive_readonly",
+      "criterion": "Google authorization remains refreshable for unattended checks, protected by PKCE and state, and limited to the read-only Drive scope."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_daily_import_prefers_configured_drive_api_when_explicit_local_source_is_empty",
+      "criterion": "A configured read-only Drive API pull overrides an explicit Drive Desktop path that has not materialized message files."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_configured_sync_pulls_all_exports_without_unrelated_drive_trees",
+      "criterion": "A stable Drive container accumulates every Instagram export packet while refusing unrelated Drive trees."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_configured_sync_downloads_only_instagram_message_subtrees",
+      "criterion": "Message mirroring downloads only Instagram message subtrees and excludes unrelated account-export sections."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_configured_sync_accumulates_every_incremental_provider_export",
+      "criterion": "Scheduled Meta delta exports compose into one cumulative local message history instead of replacing earlier packets."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_history_coverage_requires_an_explicit_completed_baseline",
+      "criterion": "Freshness and completeness remain separate: incremental packets cannot be called full history until a verified all-time baseline is recorded."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_successful_drive_pull_advances_the_current_instagram_mirror",
+      "criterion": "A completed authenticated pull atomically advances the stable local Instagram mirror and records observable freshness state."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_current_sync_replaces_bootstrap_with_the_cumulative_completed_set",
+      "criterion": "The cumulative completed provider set replaces stale bootstrap custody rows without duplicating sources, threads, or messages."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_failed_drive_pull_keeps_the_last_known_good_current_mirror",
+      "criterion": "A failed or partial provider pull cannot replace the last completed local Instagram mirror."
+    },
+    {
+      "id": "test_automation.AutomationTests.test_instagram_sync_launchagent_runs_hourly_and_at_login",
+      "criterion": "The Instagram-only macOS LaunchAgent checks hourly and at login without pinning an online-only Drive Desktop path."
+    },
+    {
+      "id": "test_automation.AutomationTests.test_instagram_sync_command_skips_when_workspace_lock_is_held",
+      "criterion": "Manual and scheduled Instagram sync runs cannot overlap and race on the same private cache files."
+    },
+    {
+      "id": "test_automation.AutomationTests.test_instagram_sync_installer_rejects_a_removable_volume_workspace",
+      "criterion": "The scheduler cannot be installed against a removable-volume workspace that macOS background privacy will deny."
+    },
+    {
+      "id": "test_automation.AutomationTests.test_exact_export_root_ignores_nested_spotlight_duplicates",
+      "criterion": "macOS Spotlight results cannot split one exact export snapshot into duplicate nested import roots."
+    },
+    {
+      "id": "test_ingest.IngestTests.test_overlapping_instagram_exports_deduplicate_messages_after_repagination",
+      "criterion": "The same logical message remains one canonical row when overlapping exports change file pagination or array order."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_daily_import_uses_existing_private_cache_when_drive_pull_fails",
+      "criterion": "A previously verified private cache remains usable when the provider pull is temporarily unavailable."
+    },
+    {
+      "id": "test_ingest.IngestTests.test_import_instagram_messages_people_group_and_media",
+      "criterion": "Instagram messages, participants, groups, media references, transcripts, and person capsules render from canonical state."
+    },
+    {
+      "id": "test_cli.CliTests.test_init_accepts_repository_eval_and_script_entries",
+      "criterion": "Repository-owned eval and script entries remain compatible with Localgraph workspace validation."
+    }
+  ]
+}
