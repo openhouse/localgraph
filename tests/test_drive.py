@@ -56,6 +56,71 @@ def message_payload() -> bytes:
 
 
 class DrivePullTests(unittest.TestCase):
+    def test_history_baseline_is_recorded_for_only_the_selected_account(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Workspace(Path(tmp) / "graph")
+            configure_google_drive_api(workspace, folder_id="drive-root")
+            configure_instagram_account(
+                workspace,
+                account_key="jamieburkart",
+                profile_name="jamieburkart",
+                owner_display_name="Jamie Burkart",
+                owner_kind="person",
+                self_names=["Jamie"],
+                adopt_legacy=True,
+                primary=True,
+            )
+            configure_instagram_account(
+                workspace,
+                account_key="nycartc",
+                profile_name="nycartc",
+                owner_display_name="NYC Artists' Coalition",
+                owner_kind="organization",
+                self_names=["nycartc"],
+                reuse_primary_drive=True,
+            )
+            export_name = "instagram-nycartc-2026-08-29-baseline"
+            export = workspace.root / "sources/instagram-accounts/nycartc/drive-cache/meta-baseline" / export_name
+            message = export / "your_instagram_activity/messages/inbox/person_123/message_1.json"
+            message.parent.mkdir(parents=True)
+            message.write_bytes(message_payload())
+            registry = workspace.root / "state/instagram-accounts/nycartc/completed-exports.json"
+            registry.parent.mkdir(parents=True)
+            registry.write_text(
+                json.dumps(
+                    {
+                        "exports": {
+                            "nycartc-baseline": {
+                                "status": "completed",
+                                "relativePath": f"meta-baseline/{export_name}",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            code, stdout = run_cli(
+                [
+                    "--root",
+                    str(workspace.root),
+                    "configure-instagram-baseline",
+                    "--account",
+                    "nycartc",
+                    "--export-name",
+                    export_name,
+                ]
+            )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(stdout)["accountKey"], "nycartc")
+            config = json.loads(workspace.config_path.read_text(encoding="utf-8"))
+            self.assertNotIn("baselineExportName", config["imports"]["instagram"]["accounts"]["jamieburkart"])
+            self.assertEqual(
+                config["imports"]["instagram"]["accounts"]["nycartc"]["baselineExportName"],
+                export_name,
+            )
+
     def test_configured_account_pull_uses_scoped_paths_and_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Workspace(Path(tmp) / "graph")

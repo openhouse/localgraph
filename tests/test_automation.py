@@ -6,6 +6,7 @@ import io
 import json
 import os
 import plistlib
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -25,6 +26,91 @@ from localgraph.paths import Workspace
 
 
 class AutomationTests(unittest.TestCase):
+    def test_multi_account_sync_preserves_projection_until_every_account_has_a_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Workspace(Path(tmp) / "graph")
+            seed = workspace.sources_dir / "seed" / "instagram-jamieburkart-2026-08-28-seed"
+            write_instagram_packet(seed, owner="Jamie", correspondent="Existing Person", content="existing")
+            code, _ = run_cli(
+                [
+                    "--root",
+                    str(workspace.root),
+                    "import",
+                    "--instagram-source",
+                    str(seed),
+                    "--skip-imessage",
+                    "--me-instagram",
+                    "Jamie",
+                ]
+            )
+            self.assertEqual(code, 0)
+            configure_test_accounts(workspace)
+            jamie_export = workspace.sources_dir / "instagram-current" / "instagram-jamieburkart-2026-08-29-current"
+            write_instagram_packet(jamie_export, owner="Jamie", correspondent="New Person", content="new")
+
+            code, stdout = run_cli(["--root", str(workspace.root), "instagram-sync", "--no-render"])
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["instagramSync"]["status"], "pending")
+            self.assertEqual(payload["instagramAccounts"]["jamieburkart"]["sync"]["status"], "local-current")
+            self.assertEqual(payload["instagramAccounts"]["nycartc"]["sync"]["status"], "pending")
+            with contextlib.closing(sqlite3.connect(workspace.database_path)) as db:
+                messages = db.execute(
+                    "SELECT COUNT(*) FROM messages JOIN threads ON threads.id = messages.thread_id "
+                    "WHERE threads.source_kind = 'instagram'"
+                ).fetchone()[0]
+            self.assertEqual(messages, 1, "a pending second account must not clear the last complete projection")
+            aggregate = json.loads((workspace.state_dir / "instagram-accounts-sync-status.json").read_text(encoding="utf-8"))
+            self.assertEqual(aggregate["status"], "pending")
+
+    def test_multi_account_sync_atomically_rebuilds_accounts_identities_status_and_views(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Workspace(Path(tmp) / "graph")
+            configure_test_accounts(workspace)
+            jamie_export = workspace.sources_dir / "instagram-current" / "instagram-jamieburkart-2026-08-29-current"
+            nycartc_export = (
+                workspace.sources_dir
+                / "instagram-accounts"
+                / "nycartc"
+                / "current"
+                / "instagram-nycartc-2026-08-29-current"
+            )
+            write_instagram_packet(jamie_export, owner="Jamie", correspondent="Shared Person", content="personal")
+            write_instagram_packet(nycartc_export, owner="nycartc", correspondent="Shared Person", content="coalition")
+
+            code, stdout = run_cli(["--root", str(workspace.root), "instagram-sync"])
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["instagramSync"]["status"], "current")
+            self.assertEqual(payload["instagramSync"]["accountsConfigured"], 2)
+            self.assertEqual(payload["result"]["totals"]["threads"], 2)
+            self.assertEqual(payload["result"]["totals"]["messages"], 2)
+            with contextlib.closing(sqlite3.connect(workspace.database_path)) as db:
+                thread_keys = [
+                    row[0]
+                    for row in db.execute(
+                        "SELECT source_thread_key FROM threads WHERE source_kind = 'instagram' ORDER BY source_thread_key"
+                    )
+                ]
+                identity_keys = {
+                    row[0]
+                    for row in db.execute(
+                        "SELECT stable_key FROM identities WHERE stable_key IN ('person:self', 'organization:instagram:nycartc')"
+                    )
+                }
+            self.assertEqual(
+                thread_keys,
+                [
+                    "jamieburkart:your_instagram_activity/messages/inbox/shared-person_123",
+                    "nycartc:your_instagram_activity/messages/inbox/shared-person_123",
+                ],
+            )
+            self.assertEqual(identity_keys, {"person:self", "organization:instagram:nycartc"})
+            self.assertTrue((workspace.views_dir / "instagram-accounts" / "jamieburkart" / "threads").is_dir())
+            self.assertTrue((workspace.views_dir / "instagram-accounts" / "nycartc" / "threads").is_dir())
+
     def test_instagram_sync_lock_allows_only_one_workspace_writer(self) -> None:
         """Catch manual and launchd sync runs racing on the same private cache files."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -328,6 +414,70 @@ def set_export_mtime(export_root: Path, value: int) -> None:
         export_root / "your_instagram_activity" / "messages" / "inbox",
     ]:
         os.utime(path, (value, value))
+
+
+def configure_test_accounts(workspace: Workspace) -> None:
+    for argv in (
+        [
+            "configure-instagram-account",
+            "--account",
+            "jamieburkart",
+            "--profile-name",
+            "jamieburkart",
+            "--owner-display-name",
+            "Jamie Burkart",
+            "--owner-kind",
+            "person",
+            "--self-name",
+            "Jamie",
+            "--adopt-legacy",
+            "--primary",
+        ],
+        [
+            "configure-instagram-account",
+            "--account",
+            "nycartc",
+            "--profile-name",
+            "nycartc",
+            "--owner-display-name",
+            "NYC Artists' Coalition",
+            "--owner-kind",
+            "organization",
+            "--self-name",
+            "nycartc",
+            "--reuse-primary-drive",
+        ],
+    ):
+        code, _ = run_cli(["--root", str(workspace.root), *argv])
+        if code != 0:
+            raise AssertionError(f"failed to configure test Instagram account: {argv}")
+
+
+def write_instagram_packet(export_root: Path, *, owner: str, correspondent: str, content: str) -> None:
+    thread = (
+        export_root
+        / "your_instagram_activity"
+        / "messages"
+        / "inbox"
+        / "shared-person_123"
+    )
+    thread.mkdir(parents=True)
+    (thread / "message_1.json").write_text(
+        json.dumps(
+            {
+                "participants": [{"name": owner}, {"name": correspondent}],
+                "title": correspondent,
+                "messages": [
+                    {
+                        "sender_name": correspondent,
+                        "timestamp_ms": 1700000000000,
+                        "content": content,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":

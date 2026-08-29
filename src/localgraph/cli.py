@@ -16,7 +16,7 @@ from .automation import (
 from .drive import DriveAPIError, authenticate_google_drive, configure_google_drive_api, pull_google_drive_folder
 from .ingest import import_workspace_sources
 from .instagram import scan_instagram_source
-from .instagram_accounts import configure_instagram_account
+from .instagram_accounts import configure_instagram_account, instagram_accounts_status
 from .paths import Workspace
 from .render import render_views
 from .schema import connect, initialize_schema
@@ -89,6 +89,10 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Exact completed instagram-* folder name created by the verified all-history export.",
     )
+    configure_baseline.add_argument(
+        "--account",
+        help="Configured Instagram account key. Omit for a legacy singleton workspace.",
+    )
 
     configure_account = commands.add_parser(
         "configure-instagram-account",
@@ -103,6 +107,11 @@ def build_parser() -> argparse.ArgumentParser:
     configure_account.add_argument("--adopt-legacy", action="store_true", help="Reuse the existing singleton cache, registry, mirror, and status paths.")
     configure_account.add_argument("--reuse-primary-drive", action="store_true", help="Reuse the primary account's Drive folder and read-only OAuth token.")
     configure_account.add_argument("--primary", action="store_true", help="Make this the primary Instagram account.")
+
+    commands.add_parser(
+        "instagram-accounts",
+        help="List configured Instagram accounts and body-free sync health.",
+    )
 
     drive_pull = commands.add_parser("drive-pull", help="Pull a private Google Drive folder into the local Instagram cache.")
     drive_pull.add_argument("--folder-id", help="Google Drive folder ID. Defaults to configured imports.instagram.googleDriveFolderId.")
@@ -199,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
                 token_path=args.token_path,
             )
         elif args.command == "configure-instagram-baseline":
-            summary = configure_instagram_baseline(workspace, args.export_name)
+            summary = configure_instagram_baseline(workspace, args.export_name, account_key=args.account)
         elif args.command == "configure-instagram-account":
             summary = configure_instagram_account(
                 workspace,
@@ -213,6 +222,8 @@ def main(argv: list[str] | None = None) -> int:
                 reuse_primary_drive=args.reuse_primary_drive,
                 primary=args.primary,
             )
+        elif args.command == "instagram-accounts":
+            summary = instagram_accounts_status(workspace)
         elif args.command == "drive-pull":
             summary = command_drive_pull(
                 workspace,

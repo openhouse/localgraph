@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PRIVATE_DIRECTORY_NAMES = ("sources", "state", "objects", "views", "annotations", "exports")
-VIEW_DIRECTORY_NAMES = ("people", "groups", "threads", "projects", "tags", "_system")
+VIEW_DIRECTORY_NAMES = ("people", "groups", "threads", "instagram-accounts", "projects", "tags", "_system")
 
 
 @dataclass(frozen=True)

@@ -175,6 +175,37 @@ def primary_instagram_account(workspace: Workspace) -> InstagramAccount | None:
     return accounts[0] if accounts else None
 
 
+def instagram_accounts_status(workspace: Workspace) -> dict[str, object]:
+    accounts = instagram_accounts(workspace, enabled_only=False)
+    primary = primary_instagram_account(workspace)
+    items: list[dict[str, object]] = []
+    for account in accounts:
+        status: dict[str, object] = {}
+        if account.sync_status_path.exists():
+            try:
+                loaded = json.loads(account.sync_status_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                loaded = {}
+            if isinstance(loaded, dict):
+                status = loaded
+        items.append({"account": account.to_public_json(), "sync": status or {"status": "not-checked"}})
+    aggregate_path = workspace.state_dir / "instagram-accounts-sync-status.json"
+    aggregate: dict[str, object] = {}
+    if aggregate_path.exists():
+        try:
+            loaded_aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            loaded_aggregate = {}
+        if isinstance(loaded_aggregate, dict):
+            aggregate = loaded_aggregate
+    return {
+        "workspace": str(workspace.root),
+        "primaryAccountKey": primary.account_key if primary is not None else None,
+        "accounts": items,
+        "aggregate": aggregate or {"status": "not-checked"},
+    }
+
+
 def load_config(workspace: Workspace) -> dict[str, Any]:
     if not workspace.config_path.exists():
         return {}

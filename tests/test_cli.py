@@ -9,10 +9,49 @@ import unittest
 from pathlib import Path
 
 from localgraph.cli import main
+from localgraph.instagram_accounts import configure_instagram_account
 from localgraph.slug import stable_view_name
 
 
 class CliTests(unittest.TestCase):
+    def test_instagram_accounts_status_lists_profiles_and_health_without_message_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace_root = Path(tmp) / "graph"
+            from localgraph.paths import Workspace
+
+            workspace = Workspace(workspace_root)
+            configure_instagram_account(
+                workspace,
+                account_key="jamieburkart",
+                profile_name="jamieburkart",
+                owner_display_name="Jamie Burkart",
+                owner_kind="person",
+                self_names=["Jamie"],
+                adopt_legacy=True,
+                primary=True,
+            )
+            configure_instagram_account(
+                workspace,
+                account_key="nycartc",
+                profile_name="nycartc",
+                owner_display_name="NYC Artists' Coalition",
+                owner_kind="organization",
+                self_names=["nycartc"],
+                reuse_primary_drive=True,
+            )
+            status_path = workspace.root / "state/instagram-accounts/nycartc/sync-status.json"
+            status_path.parent.mkdir(parents=True)
+            status_path.write_text('{"status":"pending","messageFiles":0}\n', encoding="utf-8")
+
+            code, stdout = run_cli(["--root", str(workspace.root), "instagram-accounts"])
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["primaryAccountKey"], "jamieburkart")
+            self.assertEqual([item["account"]["accountKey"] for item in payload["accounts"]], ["jamieburkart", "nycartc"])
+            self.assertEqual(payload["accounts"][1]["sync"]["status"], "pending")
+            self.assertNotIn("private body", stdout.lower())
+
     def test_configure_two_instagram_accounts_adopts_primary_and_scopes_private_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "graph"

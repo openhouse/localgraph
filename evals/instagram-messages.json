@@ -4,6 +4,22 @@
   "description": "Deterministic acquisition and integrity gates for private Instagram message imports.",
   "cases": [
     {
+      "id": "test_cli.CliTests.test_instagram_accounts_status_lists_profiles_and_health_without_message_data",
+      "criterion": "Operators can list configured Instagram profiles and body-free health state without reading or emitting private message content."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_history_baseline_is_recorded_for_only_the_selected_account",
+      "criterion": "Full-history coverage is an account-specific assertion backed by a locally completed baseline packet and cannot leak from one Instagram profile to another."
+    },
+    {
+      "id": "test_automation.AutomationTests.test_multi_account_sync_preserves_projection_until_every_account_has_a_source",
+      "criterion": "A missing or pending account cannot erase the last complete multi-account Instagram projection, and its state remains observable per account and in aggregate."
+    },
+    {
+      "id": "test_automation.AutomationTests.test_multi_account_sync_atomically_rebuilds_accounts_identities_status_and_views",
+      "criterion": "When every configured account has a usable source, one sync atomically rebuilds distinct account-scoped threads, preserves separate person and organization owners, and renders account entry points."
+    },
+    {
       "id": "test_drive.DrivePullTests.test_configured_account_pull_uses_scoped_paths_and_prefix",
       "criterion": "An account-specific authenticated pull uses that account's exact packet prefix and private cache, completion registry, and manifest paths."
     },

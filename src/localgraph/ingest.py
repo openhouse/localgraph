@@ -119,7 +119,7 @@ def clear_instagram_projection(db: sqlite3.Connection) -> dict[str, int]:
         "identities": int(
             db.execute(
                 "SELECT COUNT(*) FROM identities WHERE stable_key GLOB 'person:instagram:*' "
-                "OR stable_key GLOB 'group:instagram:*'"
+                "OR stable_key GLOB 'group:instagram:*' OR stable_key GLOB 'organization:instagram:*'"
             ).fetchone()[0]
         ),
     }
@@ -129,7 +129,7 @@ def clear_instagram_projection(db: sqlite3.Connection) -> dict[str, int]:
     db.execute("DELETE FROM accounts WHERE source_kind = 'instagram'")
     db.execute(
         "DELETE FROM identities WHERE stable_key GLOB 'person:instagram:*' "
-        "OR stable_key GLOB 'group:instagram:*'"
+        "OR stable_key GLOB 'group:instagram:*' OR stable_key GLOB 'organization:instagram:*'"
     )
     return counts
 
@@ -141,6 +141,10 @@ def import_instagram_source(
     me_name: str = "Me",
     me_names: list[str] | None = None,
     explicit: bool = False,
+    account_key: str | None = None,
+    owner_identity_key: str = "person:self",
+    owner_kind: str = "person",
+    commit: bool = True,
 ) -> SourceImportResult:
     source = source_path.expanduser().resolve()
     result = SourceImportResult("instagram", str(source))
@@ -155,6 +159,13 @@ def import_instagram_source(
         result.status = "empty"
         return result
 
+    inferred_account_keys = {
+        inferred
+        for file_path in message_files
+        if (inferred := instagram_export_account_key(detect_export_root(source, file_path).name)) is not None
+    }
+    implicit_account_scope = len(inferred_account_keys) > 1
+
     self_names = {_person_key(name) for name in [me_name, *(me_names or [])] if name}
     seen_imports: set[str] = set()
     seen_threads: set[str] = set()
@@ -166,7 +177,17 @@ def import_instagram_source(
 
     for file_path in message_files:
         export_root = detect_export_root(source, file_path)
-        source_identifier = f"instagram:{export_root.as_posix()}"
+        inferred_account_key = instagram_export_account_key(export_root.name)
+        if account_key is not None and inferred_account_key is not None and inferred_account_key != account_key:
+            raise ValueError(
+                f"Instagram export account mismatch: expected {account_key}, found {inferred_account_key} in {export_root.name}"
+            )
+        scoped_account_key = account_key or (inferred_account_key if implicit_account_scope else None)
+        source_identifier = (
+            f"instagram:{scoped_account_key}:{export_root.as_posix()}"
+            if scoped_account_key
+            else f"instagram:{export_root.as_posix()}"
+        )
         if source_identifier not in seen_imports:
             _upsert_source_import(
                 db,
@@ -183,8 +204,7 @@ def import_instagram_source(
             continue
 
         relative_thread_key = file_path.parent.relative_to(export_root).as_posix()
-        account_key = instagram_export_account_key(export_root.name)
-        source_thread_key = f"{account_key}:{relative_thread_key}" if account_key else relative_thread_key
+        source_thread_key = f"{scoped_account_key}:{relative_thread_key}" if scoped_account_key else relative_thread_key
         raw_participants = payload.get("participants") or []
         participants = _instagram_participants(raw_participants)
         title = _clean_text(payload.get("title")) or _title_from_participants(participants) or file_path.parent.name
@@ -198,7 +218,7 @@ def import_instagram_source(
             {
                 "export_root": str(export_root),
                 "thread_path": relative_thread_key,
-                "instagram_account_key": account_key,
+                "instagram_account_key": scoped_account_key,
                 "raw_title": payload.get("title"),
             },
         )
@@ -211,6 +231,9 @@ def import_instagram_source(
                 participant,
                 self_names=self_names,
                 me_name=me_name,
+                owner_identity_key=owner_identity_key,
+                owner_kind=owner_kind,
+                export_account_key=scoped_account_key,
             )
             participant_accounts[participant] = (identity_id, account_id, stable_key)
             seen_accounts.add(f"instagram:{_person_key(participant)}")
@@ -252,7 +275,15 @@ def import_instagram_source(
             sender_name = _clean_text(message.get("sender_name")) or "Unknown Instagram Sender"
             sender_account = participant_accounts.get(sender_name)
             if sender_account is None:
-                sender_account = _upsert_instagram_participant(db, sender_name, self_names=self_names, me_name=me_name)
+                sender_account = _upsert_instagram_participant(
+                    db,
+                    sender_name,
+                    self_names=self_names,
+                    me_name=me_name,
+                    owner_identity_key=owner_identity_key,
+                    owner_kind=owner_kind,
+                    export_account_key=scoped_account_key,
+                )
                 participant_accounts[sender_name] = sender_account
                 seen_accounts.add(f"instagram:{_person_key(sender_name)}")
                 sender_identity_id, sender_account_id, sender_stable_key = sender_account
@@ -303,7 +334,8 @@ def import_instagram_source(
 
         _refresh_thread_bounds(db, thread_id)
 
-    db.commit()
+    if commit:
+        db.commit()
     result.imports = len(seen_imports)
     result.threads = len(seen_threads)
     result.groups = len(seen_groups)
@@ -627,16 +659,27 @@ def _upsert_instagram_participant(
     *,
     self_names: set[str],
     me_name: str,
+    owner_identity_key: str = "person:self",
+    owner_kind: str = "person",
+    export_account_key: str | None = None,
 ) -> tuple[int, int, str]:
     clean_name = _clean_text(name) or "Unknown Instagram User"
     person_key = _person_key(clean_name)
     if person_key in self_names:
-        identity_id, stable_key = _upsert_identity(db, "person:self", me_name, "person")
+        identity_id, stable_key = _upsert_identity(db, owner_identity_key, me_name, owner_kind)
     else:
         stable_key = f"person:instagram:{person_key}"
         identity_id, stable_key = _upsert_identity(db, stable_key, clean_name, "person")
     account_key = person_key
-    account_id = _upsert_account(db, identity_id, "instagram", account_key, clean_name, None, {"name": clean_name})
+    account_id = _upsert_account(
+        db,
+        identity_id,
+        "instagram",
+        account_key,
+        clean_name,
+        None,
+        {"name": clean_name, "observedInExportAccount": export_account_key},
+    )
     return identity_id, account_id, stable_key
 
 
