@@ -13,6 +13,16 @@ from .paths import Workspace
 ACCOUNT_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 
+def required_provider_export_protocol(export_name_prefix: str) -> dict[str, object]:
+    return {
+        "destination": "google-drive",
+        "information": ["messages"],
+        "baseline": {"cadence": "once", "dateRange": "all-time"},
+        "recurring": {"cadence": "daily", "durationYears": 3},
+        "exportNamePrefix": export_name_prefix,
+    }
+
+
 @dataclass(frozen=True)
 class InstagramAccount:
     account_key: str
@@ -50,6 +60,7 @@ class InstagramAccount:
             "completedMirrorPath": str(self.completed_mirror_path),
             "syncStatusPath": str(self.sync_status_path),
             "baselineExportName": self.baseline_export_name,
+            "requiredProviderExportProtocol": required_provider_export_protocol(self.export_name_prefix),
             "enabled": self.enabled,
         }
 

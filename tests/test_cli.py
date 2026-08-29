@@ -14,6 +14,55 @@ from localgraph.slug import stable_view_name
 
 
 class CliTests(unittest.TestCase):
+    def test_instagram_accounts_status_applies_standard_export_protocol_to_every_profile(self) -> None:
+        """Catch one configured profile drifting from the provider export contract."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace_root = Path(tmp) / "graph"
+            from localgraph.paths import Workspace
+
+            workspace = Workspace(workspace_root)
+            configure_instagram_account(
+                workspace,
+                account_key="jamieburkart",
+                profile_name="jamieburkart",
+                owner_display_name="Jamie Burkart",
+                owner_kind="person",
+                self_names=["Jamie"],
+                adopt_legacy=True,
+                primary=True,
+            )
+            configure_instagram_account(
+                workspace,
+                account_key="nycartc",
+                profile_name="nycartc",
+                owner_display_name="NYC Artists Coalition",
+                owner_kind="organization",
+                self_names=["nycartc"],
+                reuse_primary_drive=True,
+            )
+
+            code, stdout = run_cli(["--root", str(workspace.root), "instagram-accounts"])
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            protocols = {
+                item["account"]["accountKey"]: item["account"]["requiredProviderExportProtocol"]
+                for item in payload["accounts"]
+            }
+            self.assertEqual(set(protocols), {"jamieburkart", "nycartc"})
+            for account_key, protocol in protocols.items():
+                self.assertEqual(protocol["destination"], "google-drive")
+                self.assertEqual(protocol["information"], ["messages"])
+                self.assertEqual(
+                    protocol["baseline"],
+                    {"cadence": "once", "dateRange": "all-time"},
+                )
+                self.assertEqual(
+                    protocol["recurring"],
+                    {"cadence": "daily", "durationYears": 3},
+                )
+                self.assertEqual(protocol["exportNamePrefix"], f"instagram-{account_key}-")
+
     def test_instagram_accounts_status_lists_profiles_and_health_without_message_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace_root = Path(tmp) / "graph"

@@ -90,6 +90,8 @@ python -m localgraph --root ~/Localgraph configure-instagram-account \
 python -m localgraph --root ~/Localgraph instagram-accounts
 ```
 
+The status output includes the required provider export protocol for every account: a one-time all-history messages baseline followed by messages-only Google Drive exports every day for three years. This describes the required provider state; completion still requires verification in Meta Accounts Center and a locally completed exact-prefix packet.
+
 The account key namespaces provider thread paths, so identical paths from two
 profiles cannot merge. Personal and organizational exporting identities also
 remain distinct. One scheduler prepares every account, then replaces the shared

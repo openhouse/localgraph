@@ -18,6 +18,36 @@ Maintain one current local correspondence graph from any number of explicitly co
 
 Accounts may share a Drive container and OAuth token. They never share a packet selector, cache, completion registry, manifest, mirror, baseline, or status file.
 
+## Required provider export protocol
+
+Every enabled Instagram account follows one provider-side protocol. The `instagram-accounts` command exposes this as `requiredProviderExportProtocol` for each account; it is a requirement, not a claim that Localgraph can query Meta's live settings.
+
+| Setting | Required value |
+| --- | --- |
+| Destination | Google Drive |
+| Information | Messages only |
+| Historical baseline | Once, all time |
+| Recurring cadence | Daily |
+| Recurring term | 3 years |
+| Packet prefix | `instagram-<profile>-` |
+
+The recurring values mirror the inspected `jamieburkart` schedule: Meta reports selected information exported to Google Drive once a day for three years. The all-time baseline remains a separate requirement because Meta describes scheduled exports as information that was not in the previous export; incremental packets alone do not prove complete history.
+
+Notification frequency is not part of the ingestion contract. It may remain at Meta's default without changing packet completeness, account isolation, or Localgraph freshness checks.
+
+### Apply the protocol to a configured account
+
+1. In the Chrome profile authenticated as the target Instagram account, confirm the visible profile identity before opening Accounts Center.
+2. Open **Your information and permissions → Export your information → Create export** and select only that Instagram profile.
+3. Create a one-time Google Drive export of **Messages** for **All time**. This becomes eligible as the account baseline only after the packet is locally complete and explicitly recorded with `configure-instagram-baseline --account <account>`.
+4. Create a second export for the same profile and destination. Select **Messages**, **Daily**, and **3 years**.
+5. Grant Meta only the Google Drive permission shown in the provider authorization flow. Localgraph's own Drive reader remains separately authorized with read-only scope.
+6. Confirm that Meta's current-activity summary names the exact Instagram profile and reports selected information, Google Drive, and once a day for three years.
+7. Run `instagram-accounts` and verify that the account's `requiredProviderExportProtocol.exportNamePrefix` matches the provider packet name exactly.
+8. Run an authenticated sync. Accept operational completion only after an exact-prefix packet is complete locally and the account status becomes `current`; do not infer full history until the baseline is recorded.
+
+Repeat these steps for every enabled account in the registry. Never reuse an authenticated Instagram tab merely because another account is operated by the same person.
+
 ## Acquisition and publication flow
 
 1. The single hourly LaunchAgent acquires the workspace writer lock.
@@ -49,7 +79,8 @@ Workspaces without an account registry continue to use the singleton Instagram c
 
 For each account, acceptance requires:
 
-- a provider export schedule targeting the authorized Drive container;
+- a one-time, all-time, messages-only baseline export to the authorized Drive container;
+- a messages-only provider export scheduled daily for three years to that container;
 - an exact account-prefix match during a real authenticated pull;
 - a current or explicitly pending/degraded account status;
 - a successful atomic import with distinct account-scoped thread keys;
