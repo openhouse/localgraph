@@ -3,17 +3,18 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 
-INSTAGRAM_EXPORT_ACCOUNT_PATTERN = re.compile(
-    r"^instagram-(?P<account>.+?)-\d{4}-\d{2}-\d{2}(?:-|$)",
+FACEBOOK_EXPORT_ACCOUNT_PATTERN = re.compile(
+    r"^facebook-(?P<account>.+?)-\d{4}-\d{2}-\d{2}(?:-|$)",
     re.IGNORECASE,
 )
 
 
 @dataclass
-class InstagramExportScan:
+class FacebookExportScan:
     name: str
     path: str
     relative_path: str
@@ -32,41 +33,41 @@ class InstagramExportScan:
         }
 
 
-def scan_instagram_source(source_path: Path) -> dict[str, object]:
+def scan_facebook_source(source_path: Path) -> dict[str, object]:
+    """Inventory Facebook message packets without opening their JSON bodies."""
     source = source_path.expanduser().resolve()
-    exports: dict[Path, InstagramExportScan] = {}
+    exports: dict[Path, FacebookExportScan] = {}
     if not source.exists():
-        return {"sourceKind": "instagram", "sourcePath": str(source), "exports": [], "totalMessageFiles": 0}
+        return {"sourceKind": "facebook", "sourcePath": str(source), "exports": [], "totalMessageFiles": 0}
 
-    message_files = instagram_message_files(source)
+    message_files = facebook_message_files(source)
     for file_path in message_files:
-        export_root = detect_export_root(source, file_path)
+        export_root = detect_facebook_export_root(source, file_path)
         relative_file = file_path.relative_to(export_root).as_posix()
-        thread_folder = str(Path(relative_file).parent).replace("\\", "/")
         item = exports.get(export_root)
         if item is None:
             relative_export = export_root.relative_to(source).as_posix() if export_root != source else "."
-            item = InstagramExportScan(
+            item = FacebookExportScan(
                 name=export_root.name,
                 path=str(export_root),
                 relative_path=relative_export,
             )
             exports[export_root] = item
         item.message_files += 1
-        item.thread_folders.add(thread_folder)
+        item.thread_folders.add(str(Path(relative_file).parent).replace("\\", "/"))
         modified = _iso_mtime(file_path)
         item.latest_modified_time = max(filter(None, [item.latest_modified_time, modified]))
 
     return {
-        "sourceKind": "instagram",
+        "sourceKind": "facebook",
         "sourcePath": str(source),
         "exports": [item.to_json() for _, item in sorted(exports.items(), key=lambda pair: pair[1].relative_path)],
         "totalMessageFiles": len(message_files),
     }
 
 
-def instagram_message_files(source_path: Path) -> list[Path]:
-    """List Instagram message JSON while following only acyclic directory symlinks."""
+def facebook_message_files(source_path: Path) -> list[Path]:
+    """List Facebook message JSON while following only acyclic directory symlinks."""
     source = source_path.expanduser().resolve()
     if not source.exists():
         return []
@@ -80,10 +81,11 @@ def instagram_message_files(source_path: Path) -> list[Path]:
             continue
         seen_directories.add(resolved_root)
         directory_names[:] = [
-            name
-            for name in directory_names
-            if (root_path / name).resolve() not in seen_directories
+            name for name in directory_names if (root_path / name).resolve() not in seen_directories
         ]
+        relative_parts = root_path.relative_to(source).parts
+        if "messages" not in relative_parts and root_path != source:
+            continue
         for name in file_names:
             if name == "message.json" or re.fullmatch(r"message_\d+\.json", name):
                 candidate = root_path / name
@@ -92,29 +94,24 @@ def instagram_message_files(source_path: Path) -> list[Path]:
     return sorted(message_files)
 
 
-def detect_export_root(source_path: Path, file_path: Path) -> Path:
+def detect_facebook_export_root(source_path: Path, file_path: Path) -> Path:
     parts = file_path.relative_to(source_path).parts
-    if "your_instagram_activity" in parts:
-        index = parts.index("your_instagram_activity")
-        if index > 0:
-            return source_path.joinpath(*parts[:index])
+    if "your_facebook_activity" in parts:
+        index = parts.index("your_facebook_activity")
+        return source_path.joinpath(*parts[:index]) if index > 0 else source_path
     if "messages" in parts:
         index = parts.index("messages")
-        if index > 0:
-            return source_path.joinpath(*parts[:index])
+        return source_path.joinpath(*parts[:index]) if index > 0 else source_path
     return source_path
 
 
-def instagram_export_account_key(export_name: str) -> str | None:
-    """Return the exporting profile encoded in a dated Meta packet name."""
-    match = INSTAGRAM_EXPORT_ACCOUNT_PATTERN.match(export_name.strip())
+def facebook_export_account_key(export_name: str) -> str | None:
+    match = FACEBOOK_EXPORT_ACCOUNT_PATTERN.match(export_name.strip())
     if match is None:
         return None
-    account = match.group("account").strip().lstrip("@").lower()
+    account = match.group("account").strip().lower()
     return account or None
 
 
 def _iso_mtime(path: Path) -> str:
-    from datetime import datetime, timezone
-
     return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")

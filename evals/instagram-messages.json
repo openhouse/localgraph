@@ -4,6 +4,46 @@
   "description": "Deterministic acquisition and integrity gates for private Instagram message imports.",
   "cases": [
     {
+      "id": "test_cli.CliTests.test_instagram_accounts_status_applies_standard_export_protocol_to_every_profile",
+      "criterion": "Every configured Instagram profile exposes the same messages-only Google Drive protocol: one all-time baseline followed by all-time-lookback daily exports for three years, with an account-specific packet prefix."
+    },
+    {
+      "id": "test_automation.AutomationTests.test_multi_account_launchagent_reads_accounts_from_config",
+      "criterion": "The single hourly scheduler reads the live account registry instead of embedding a stale or private account list in its launch command."
+    },
+    {
+      "id": "test_cli.CliTests.test_instagram_accounts_status_lists_profiles_and_health_without_message_data",
+      "criterion": "Operators can list configured Instagram profiles and body-free health state without reading or emitting private message content."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_history_baseline_is_recorded_for_only_the_selected_account",
+      "criterion": "Full-history coverage is an account-specific assertion backed by a locally completed baseline packet and cannot leak from one Instagram profile to another."
+    },
+    {
+      "id": "test_automation.AutomationTests.test_multi_account_sync_preserves_projection_until_every_account_has_a_source",
+      "criterion": "A missing or pending account cannot erase the last complete multi-account Instagram projection, and its state remains observable per account and in aggregate."
+    },
+    {
+      "id": "test_automation.AutomationTests.test_multi_account_sync_atomically_rebuilds_accounts_identities_status_and_views",
+      "criterion": "When every configured account has a usable source, one sync atomically rebuilds distinct account-scoped threads, preserves separate person and organization owners, and renders account entry points."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_configured_account_pull_uses_scoped_paths_and_prefix",
+      "criterion": "An account-specific authenticated pull uses that account's exact packet prefix and private cache, completion registry, and manifest paths."
+    },
+    {
+      "id": "test_drive.DrivePullTests.test_drive_export_discovery_filters_packets_by_exact_account_prefix",
+      "criterion": "A shared Drive container selects only folders matching the configured Instagram account's exact export prefix, excluding other profiles and lookalike names."
+    },
+    {
+      "id": "test_cli.CliTests.test_configure_two_instagram_accounts_adopts_primary_and_scopes_private_state",
+      "criterion": "A legacy primary Instagram pipeline can be adopted in place while a second account receives isolated cache, registry, mirror, and status paths with shared read-only Drive credentials."
+    },
+    {
+      "id": "test_ingest.IngestTests.test_two_instagram_accounts_keep_identical_thread_paths_distinct",
+      "criterion": "Identical provider thread paths exported by different Instagram accounts remain distinct canonical threads and retain both message histories."
+    },
+    {
       "id": "test_drive.DrivePullTests.test_configured_sync_records_and_skips_exports_without_messages",
       "criterion": "A legitimate Instagram export packet with no message files is recorded and skipped without degrading completed message history or being retraversed forever."
     },

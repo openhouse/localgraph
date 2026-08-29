@@ -11,13 +11,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from .instagram import detect_export_root, instagram_message_files
+from .facebook import detect_facebook_export_root, facebook_export_account_key, facebook_message_files
+from .instagram import detect_export_root, instagram_export_account_key, instagram_message_files
 from .paths import Workspace
 from .slug import slugify, stable_hash
 
 
 APPLE_EPOCH_UNIX_SECONDS = 978307200
 INSTAGRAM_MEDIA_KEYS = ("photos", "videos", "audio_files", "files", "gifs")
+FACEBOOK_MEDIA_KEYS = ("photos", "videos", "audio_files", "files", "gifs", "sticker")
 
 
 @dataclass
@@ -119,7 +121,7 @@ def clear_instagram_projection(db: sqlite3.Connection) -> dict[str, int]:
         "identities": int(
             db.execute(
                 "SELECT COUNT(*) FROM identities WHERE stable_key GLOB 'person:instagram:*' "
-                "OR stable_key GLOB 'group:instagram:*'"
+                "OR stable_key GLOB 'group:instagram:*' OR stable_key GLOB 'organization:instagram:*'"
             ).fetchone()[0]
         ),
     }
@@ -129,7 +131,39 @@ def clear_instagram_projection(db: sqlite3.Connection) -> dict[str, int]:
     db.execute("DELETE FROM accounts WHERE source_kind = 'instagram'")
     db.execute(
         "DELETE FROM identities WHERE stable_key GLOB 'person:instagram:*' "
-        "OR stable_key GLOB 'group:instagram:*'"
+        "OR stable_key GLOB 'group:instagram:*' OR stable_key GLOB 'organization:instagram:*'"
+    )
+    return counts
+
+
+def clear_imessage_projection(db: sqlite3.Connection) -> dict[str, int]:
+    """Remove source-derived iMessage state inside the caller's transaction."""
+    counts = {
+        "sourceImports": int(
+            db.execute("SELECT COUNT(*) FROM source_imports WHERE source_kind = 'imessage'").fetchone()[0]
+        ),
+        "threads": int(db.execute("SELECT COUNT(*) FROM threads WHERE source_kind = 'imessage'").fetchone()[0]),
+        "messages": int(
+            db.execute(
+                "SELECT COUNT(*) FROM messages JOIN threads ON threads.id = messages.thread_id "
+                "WHERE threads.source_kind = 'imessage'"
+            ).fetchone()[0]
+        ),
+        "accounts": int(db.execute("SELECT COUNT(*) FROM accounts WHERE source_kind = 'imessage'").fetchone()[0]),
+        "identities": int(
+            db.execute(
+                "SELECT COUNT(*) FROM identities WHERE stable_key GLOB 'person:imessage:*' "
+                "OR stable_key GLOB 'group:imessage:*'"
+            ).fetchone()[0]
+        ),
+    }
+    db.execute("DELETE FROM source_imports WHERE source_kind = 'imessage'")
+    db.execute("DELETE FROM threads WHERE source_kind = 'imessage'")
+    db.execute("DELETE FROM accounts WHERE source_kind = 'imessage'")
+    db.execute("DELETE FROM graph_edges WHERE source = 'imessage-import'")
+    db.execute(
+        "DELETE FROM identities WHERE stable_key GLOB 'person:imessage:*' "
+        "OR stable_key GLOB 'group:imessage:*'"
     )
     return counts
 
@@ -141,6 +175,10 @@ def import_instagram_source(
     me_name: str = "Me",
     me_names: list[str] | None = None,
     explicit: bool = False,
+    account_key: str | None = None,
+    owner_identity_key: str = "person:self",
+    owner_kind: str = "person",
+    commit: bool = True,
 ) -> SourceImportResult:
     source = source_path.expanduser().resolve()
     result = SourceImportResult("instagram", str(source))
@@ -155,6 +193,13 @@ def import_instagram_source(
         result.status = "empty"
         return result
 
+    inferred_account_keys = {
+        inferred
+        for file_path in message_files
+        if (inferred := instagram_export_account_key(detect_export_root(source, file_path).name)) is not None
+    }
+    implicit_account_scope = len(inferred_account_keys) > 1
+
     self_names = {_person_key(name) for name in [me_name, *(me_names or [])] if name}
     seen_imports: set[str] = set()
     seen_threads: set[str] = set()
@@ -166,7 +211,17 @@ def import_instagram_source(
 
     for file_path in message_files:
         export_root = detect_export_root(source, file_path)
-        source_identifier = f"instagram:{export_root.as_posix()}"
+        inferred_account_key = instagram_export_account_key(export_root.name)
+        if account_key is not None and inferred_account_key is not None and inferred_account_key != account_key:
+            raise ValueError(
+                f"Instagram export account mismatch: expected {account_key}, found {inferred_account_key} in {export_root.name}"
+            )
+        scoped_account_key = account_key or (inferred_account_key if implicit_account_scope else None)
+        source_identifier = (
+            f"instagram:{scoped_account_key}:{export_root.as_posix()}"
+            if scoped_account_key
+            else f"instagram:{export_root.as_posix()}"
+        )
         if source_identifier not in seen_imports:
             _upsert_source_import(
                 db,
@@ -182,7 +237,8 @@ def import_instagram_source(
             result.warnings.append(f"skipped non-object JSON: {file_path}")
             continue
 
-        source_thread_key = file_path.parent.relative_to(export_root).as_posix()
+        relative_thread_key = file_path.parent.relative_to(export_root).as_posix()
+        source_thread_key = f"{scoped_account_key}:{relative_thread_key}" if scoped_account_key else relative_thread_key
         raw_participants = payload.get("participants") or []
         participants = _instagram_participants(raw_participants)
         title = _clean_text(payload.get("title")) or _title_from_participants(participants) or file_path.parent.name
@@ -195,7 +251,8 @@ def import_instagram_source(
             thread_kind,
             {
                 "export_root": str(export_root),
-                "thread_path": source_thread_key,
+                "thread_path": relative_thread_key,
+                "instagram_account_key": scoped_account_key,
                 "raw_title": payload.get("title"),
             },
         )
@@ -208,6 +265,9 @@ def import_instagram_source(
                 participant,
                 self_names=self_names,
                 me_name=me_name,
+                owner_identity_key=owner_identity_key,
+                owner_kind=owner_kind,
+                export_account_key=scoped_account_key,
             )
             participant_accounts[participant] = (identity_id, account_id, stable_key)
             seen_accounts.add(f"instagram:{_person_key(participant)}")
@@ -249,7 +309,15 @@ def import_instagram_source(
             sender_name = _clean_text(message.get("sender_name")) or "Unknown Instagram Sender"
             sender_account = participant_accounts.get(sender_name)
             if sender_account is None:
-                sender_account = _upsert_instagram_participant(db, sender_name, self_names=self_names, me_name=me_name)
+                sender_account = _upsert_instagram_participant(
+                    db,
+                    sender_name,
+                    self_names=self_names,
+                    me_name=me_name,
+                    owner_identity_key=owner_identity_key,
+                    owner_kind=owner_kind,
+                    export_account_key=scoped_account_key,
+                )
                 participant_accounts[sender_name] = sender_account
                 seen_accounts.add(f"instagram:{_person_key(sender_name)}")
                 sender_identity_id, sender_account_id, sender_stable_key = sender_account
@@ -300,7 +368,212 @@ def import_instagram_source(
 
         _refresh_thread_bounds(db, thread_id)
 
-    db.commit()
+    if commit:
+        db.commit()
+    result.imports = len(seen_imports)
+    result.threads = len(seen_threads)
+    result.groups = len(seen_groups)
+    result.accounts = len(seen_accounts)
+    result.messages = len(seen_messages)
+    result.media = len(seen_media)
+    return result
+
+
+def import_facebook_source(
+    db: sqlite3.Connection,
+    source_path: Path,
+    *,
+    account_key: str,
+    owner_display_name: str,
+    owner_kind: str,
+    owner_identity_key: str,
+    self_names: list[str] | None = None,
+    explicit: bool = False,
+    commit: bool = True,
+) -> SourceImportResult:
+    """Import one Facebook profile or Page export into an account-scoped projection."""
+    source = source_path.expanduser().resolve()
+    result = SourceImportResult("facebook", str(source))
+    if not source.exists():
+        if explicit:
+            raise FileNotFoundError(f"Facebook source does not exist: {source}")
+        result.status = "missing"
+        return result
+
+    message_files = facebook_message_files(source)
+    if not message_files:
+        result.status = "empty"
+        return result
+
+    normalized_account_key = account_key.strip().lower()
+    self_name_keys = {
+        _person_key(name)
+        for name in [owner_display_name, *(self_names or [])]
+        if name
+    }
+    seen_imports: set[str] = set()
+    seen_threads: set[str] = set()
+    seen_groups: set[str] = set()
+    seen_accounts: set[str] = set()
+    seen_messages: set[tuple[int, str]] = set()
+    seen_media: set[str] = set()
+    message_occurrences: dict[tuple[str, str, str], int] = {}
+
+    for file_path in message_files:
+        export_root = detect_facebook_export_root(source, file_path)
+        inferred_account_key = facebook_export_account_key(export_root.name)
+        if inferred_account_key is not None and inferred_account_key != normalized_account_key:
+            raise ValueError(
+                f"Facebook export account mismatch: expected {normalized_account_key}, "
+                f"found {inferred_account_key} in {export_root.name}"
+            )
+        source_identifier = f"facebook:{normalized_account_key}:{export_root.as_posix()}"
+        if source_identifier not in seen_imports:
+            _upsert_source_import(
+                db,
+                "facebook",
+                source_identifier,
+                export_root,
+                {
+                    "source_root": str(source),
+                    "export_name": export_root.name,
+                    "facebook_account_key": normalized_account_key,
+                },
+            )
+            seen_imports.add(source_identifier)
+
+        payload = _read_instagram_json(file_path)
+        if not isinstance(payload, dict):
+            result.warnings.append(f"skipped non-object JSON: {file_path}")
+            continue
+
+        relative_thread_key = file_path.parent.relative_to(export_root).as_posix()
+        source_thread_key = f"{normalized_account_key}:{relative_thread_key}"
+        participants = _instagram_participants(payload.get("participants") or [])
+        title = _clean_text(payload.get("title")) or _title_from_participants(participants) or file_path.parent.name
+        thread_kind = "group" if len(participants) > 2 else "direct"
+        thread_id = _upsert_thread(
+            db,
+            "facebook",
+            source_thread_key,
+            title,
+            thread_kind,
+            {
+                "export_root": str(export_root),
+                "thread_path": relative_thread_key,
+                "facebook_account_key": normalized_account_key,
+                "raw_title": payload.get("title"),
+            },
+        )
+        seen_threads.add(source_thread_key)
+
+        participant_accounts: dict[str, tuple[int, int, str]] = {}
+        for participant in participants:
+            participant_record = _upsert_facebook_participant(
+                db,
+                participant,
+                self_names=self_name_keys,
+                owner_display_name=owner_display_name,
+                owner_identity_key=owner_identity_key,
+                owner_kind=owner_kind,
+                export_account_key=normalized_account_key,
+            )
+            participant_accounts[participant] = participant_record
+            _, _, stable_key = participant_record
+            seen_accounts.add(f"facebook:{_person_key(participant)}")
+            _upsert_thread_participant(db, thread_id, participant_record[0], participant_record[1])
+            _upsert_edge(
+                db,
+                "thread",
+                _thread_key("facebook", source_thread_key),
+                "has_participant",
+                "identity",
+                stable_key,
+                "facebook-import",
+            )
+
+        if thread_kind == "group":
+            group_key = _group_key("facebook", source_thread_key)
+            _upsert_identity(db, group_key, title, "group")
+            seen_groups.add(group_key)
+            _upsert_edge(
+                db,
+                "thread",
+                _thread_key("facebook", source_thread_key),
+                "represents_group",
+                "identity",
+                group_key,
+                "facebook-import",
+            )
+            for _, _, stable_key in participant_accounts.values():
+                _upsert_edge(db, "identity", group_key, "has_participant", "identity", stable_key, "facebook-import")
+
+        messages = payload.get("messages") or []
+        if not isinstance(messages, list):
+            result.warnings.append(f"skipped non-list messages in {file_path}")
+            continue
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            sender_name = _clean_text(message.get("sender_name")) or "Unknown Facebook Sender"
+            sender_account = participant_accounts.get(sender_name)
+            if sender_account is None:
+                sender_account = _upsert_facebook_participant(
+                    db,
+                    sender_name,
+                    self_names=self_name_keys,
+                    owner_display_name=owner_display_name,
+                    owner_identity_key=owner_identity_key,
+                    owner_kind=owner_kind,
+                    export_account_key=normalized_account_key,
+                )
+                participant_accounts[sender_name] = sender_account
+                seen_accounts.add(f"facebook:{_person_key(sender_name)}")
+                _upsert_thread_participant(db, thread_id, sender_account[0], sender_account[1])
+                _upsert_edge(
+                    db,
+                    "thread",
+                    _thread_key("facebook", source_thread_key),
+                    "has_participant",
+                    "identity",
+                    sender_account[2],
+                    "facebook-import",
+                )
+                if thread_kind == "group":
+                    _upsert_edge(
+                        db,
+                        "identity",
+                        _group_key("facebook", source_thread_key),
+                        "has_participant",
+                        "identity",
+                        sender_account[2],
+                        "facebook-import",
+                    )
+            timestamp_ms = _as_int(message.get("timestamp_ms"))
+            fingerprint = _instagram_message_fingerprint(message)
+            occurrence_key = (export_root.as_posix(), source_thread_key, fingerprint)
+            occurrence = message_occurrences.get(occurrence_key, 0)
+            message_occurrences[occurrence_key] = occurrence + 1
+            source_message_key = _instagram_message_key(message, occurrence=occurrence, fingerprint=fingerprint)
+            message_id = _upsert_message(
+                db,
+                thread_id,
+                source_message_key,
+                sender_account[0],
+                sender_account[1],
+                _timestamp_ms_to_iso(timestamp_ms),
+                _instagram_message_body(message),
+                message,
+            )
+            seen_messages.add((thread_id, source_message_key))
+            for media in _facebook_media_objects(export_root, source_thread_key, source_message_key, message):
+                media_id = _upsert_media_object(db, message_id, media)
+                if media_id is not None:
+                    seen_media.add(str(media["object_key"]))
+        _refresh_thread_bounds(db, thread_id)
+
+    if commit:
+        db.commit()
     result.imports = len(seen_imports)
     result.threads = len(seen_threads)
     result.groups = len(seen_groups)
@@ -317,6 +590,7 @@ def import_imessage_chat_db(
     me_name: str = "Me",
     me_handles: list[str] | None = None,
     explicit: bool = False,
+    commit: bool = True,
 ) -> SourceImportResult:
     source = chat_db_path.expanduser().resolve()
     result = SourceImportResult("imessage", str(source))
@@ -525,7 +799,8 @@ def import_imessage_chat_db(
     finally:
         source_db.close()
 
-    db.commit()
+    if commit:
+        db.commit()
     result.threads = len(seen_threads)
     result.groups = len(seen_groups)
     result.accounts = len(seen_accounts) + 1
@@ -602,6 +877,36 @@ def _instagram_media_objects(
     return media
 
 
+def _facebook_media_objects(
+    export_root: Path,
+    source_thread_key: str,
+    source_message_key: str,
+    message: dict[str, object],
+) -> list[dict[str, object]]:
+    media: list[dict[str, object]] = []
+    for key in FACEBOOK_MEDIA_KEYS:
+        raw_items = message.get(key)
+        items = raw_items if isinstance(raw_items, list) else [raw_items] if isinstance(raw_items, dict) else []
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
+            uri = _clean_text(item.get("uri"))
+            if not uri:
+                continue
+            object_key = f"facebook:{stable_hash(f'{source_thread_key}:{source_message_key}:{key}:{index}:{uri}', length=24)}"
+            media.append(
+                {
+                    "object_key": object_key,
+                    "source_uri": uri,
+                    "local_path": str((export_root / uri).resolve()) if not Path(uri).is_absolute() else uri,
+                    "mime_type": item.get("mime_type"),
+                    "checksum": None,
+                    "raw_metadata": {"kind": key, **item},
+                }
+            )
+    return media
+
+
 def _instagram_message_fingerprint(message: dict[str, object]) -> str:
     stable_payload = json.dumps(message, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(stable_payload.encode("utf-8")).hexdigest()
@@ -624,16 +929,58 @@ def _upsert_instagram_participant(
     *,
     self_names: set[str],
     me_name: str,
+    owner_identity_key: str = "person:self",
+    owner_kind: str = "person",
+    export_account_key: str | None = None,
 ) -> tuple[int, int, str]:
     clean_name = _clean_text(name) or "Unknown Instagram User"
     person_key = _person_key(clean_name)
     if person_key in self_names:
-        identity_id, stable_key = _upsert_identity(db, "person:self", me_name, "person")
+        identity_id, stable_key = _upsert_identity(db, owner_identity_key, me_name, owner_kind)
     else:
         stable_key = f"person:instagram:{person_key}"
         identity_id, stable_key = _upsert_identity(db, stable_key, clean_name, "person")
     account_key = person_key
-    account_id = _upsert_account(db, identity_id, "instagram", account_key, clean_name, None, {"name": clean_name})
+    account_id = _upsert_account(
+        db,
+        identity_id,
+        "instagram",
+        account_key,
+        clean_name,
+        None,
+        {"name": clean_name, "observedInExportAccount": export_account_key},
+    )
+    return identity_id, account_id, stable_key
+
+
+def _upsert_facebook_participant(
+    db: sqlite3.Connection,
+    name: str,
+    *,
+    self_names: set[str],
+    owner_display_name: str,
+    owner_identity_key: str,
+    owner_kind: str,
+    export_account_key: str,
+) -> tuple[int, int, str]:
+    clean_name = _clean_text(name) or "Unknown Facebook User"
+    participant_key = _person_key(clean_name)
+    if participant_key in self_names:
+        identity_id, stable_key = _upsert_identity(db, owner_identity_key, owner_display_name, owner_kind)
+        account_key = export_account_key
+    else:
+        stable_key = f"person:facebook:{participant_key}"
+        identity_id, stable_key = _upsert_identity(db, stable_key, clean_name, "person")
+        account_key = participant_key
+    account_id = _upsert_account(
+        db,
+        identity_id,
+        "facebook",
+        account_key,
+        clean_name,
+        None,
+        {"name": clean_name, "observedInExportAccount": export_account_key},
+    )
     return identity_id, account_id, stable_key
 
 

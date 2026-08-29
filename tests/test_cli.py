@@ -9,10 +9,186 @@ import unittest
 from pathlib import Path
 
 from localgraph.cli import main
+from localgraph.instagram_accounts import configure_instagram_account
 from localgraph.slug import stable_view_name
 
 
 class CliTests(unittest.TestCase):
+    def test_instagram_accounts_status_applies_standard_export_protocol_to_every_profile(self) -> None:
+        """Catch one configured profile drifting from the provider export contract."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace_root = Path(tmp) / "graph"
+            from localgraph.paths import Workspace
+
+            workspace = Workspace(workspace_root)
+            configure_instagram_account(
+                workspace,
+                account_key="jamieburkart",
+                profile_name="jamieburkart",
+                owner_display_name="Jamie Burkart",
+                owner_kind="person",
+                self_names=["Jamie"],
+                adopt_legacy=True,
+                primary=True,
+            )
+            configure_instagram_account(
+                workspace,
+                account_key="nycartc",
+                profile_name="nycartc",
+                owner_display_name="NYC Artists Coalition",
+                owner_kind="organization",
+                self_names=["nycartc"],
+                reuse_primary_drive=True,
+            )
+
+            code, stdout = run_cli(["--root", str(workspace.root), "instagram-accounts"])
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            protocols = {
+                item["account"]["accountKey"]: item["account"]["requiredProviderExportProtocol"]
+                for item in payload["accounts"]
+            }
+            self.assertEqual(set(protocols), {"jamieburkart", "nycartc"})
+            for account_key, protocol in protocols.items():
+                self.assertEqual(protocol["destination"], "google-drive")
+                self.assertEqual(protocol["information"], ["messages"])
+                self.assertEqual(
+                    protocol["baseline"],
+                    {"cadence": "once", "dateRange": "all-time"},
+                )
+                self.assertEqual(
+                    protocol["recurring"],
+                    {"cadence": "daily", "dateRange": "all-time", "durationYears": 3},
+                )
+                self.assertEqual(protocol["exportNamePrefix"], f"instagram-{account_key}-")
+
+    def test_instagram_accounts_status_lists_profiles_and_health_without_message_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace_root = Path(tmp) / "graph"
+            from localgraph.paths import Workspace
+
+            workspace = Workspace(workspace_root)
+            configure_instagram_account(
+                workspace,
+                account_key="jamieburkart",
+                profile_name="jamieburkart",
+                owner_display_name="Jamie Burkart",
+                owner_kind="person",
+                self_names=["Jamie"],
+                adopt_legacy=True,
+                primary=True,
+            )
+            configure_instagram_account(
+                workspace,
+                account_key="nycartc",
+                profile_name="nycartc",
+                owner_display_name="NYC Artists' Coalition",
+                owner_kind="organization",
+                self_names=["nycartc"],
+                reuse_primary_drive=True,
+            )
+            status_path = workspace.root / "state/instagram-accounts/nycartc/sync-status.json"
+            status_path.parent.mkdir(parents=True)
+            status_path.write_text('{"status":"pending","messageFiles":0}\n', encoding="utf-8")
+
+            code, stdout = run_cli(["--root", str(workspace.root), "instagram-accounts"])
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["primaryAccountKey"], "jamieburkart")
+            self.assertEqual([item["account"]["accountKey"] for item in payload["accounts"]], ["jamieburkart", "nycartc"])
+            self.assertEqual(payload["accounts"][1]["sync"]["status"], "pending")
+            self.assertNotIn("private body", stdout.lower())
+
+    def test_configure_two_instagram_accounts_adopts_primary_and_scopes_private_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "graph"
+            code, _ = run_cli(["--root", str(root), "init"])
+            self.assertEqual(code, 0)
+            code, _ = run_cli(["--root", str(root), "configure-drive-api", "--folder-id", "drive-root"])
+            self.assertEqual(code, 0)
+
+            code, _ = run_cli(
+                [
+                    "--root",
+                    str(root),
+                    "configure-instagram-account",
+                    "--account",
+                    "jamieburkart",
+                    "--profile-name",
+                    "jamieburkart",
+                    "--owner-display-name",
+                    "Jamie Burkart",
+                    "--owner-kind",
+                    "person",
+                    "--self-name",
+                    "Jamie",
+                    "--adopt-legacy",
+                    "--primary",
+                ]
+            )
+            self.assertEqual(code, 0)
+            code, _ = run_cli(
+                [
+                    "--root",
+                    str(root),
+                    "configure-instagram-account",
+                    "--account",
+                    "nycartc",
+                    "--profile-name",
+                    "nycartc",
+                    "--owner-display-name",
+                    "NYC Artists' Coalition",
+                    "--owner-kind",
+                    "organization",
+                    "--self-name",
+                    "nycartc",
+                    "--reuse-primary-drive",
+                ]
+            )
+            self.assertEqual(code, 0)
+
+            config = json.loads((root / "localgraph.config.json").read_text(encoding="utf-8"))
+            instagram = config["imports"]["instagram"]
+            self.assertEqual(instagram["primaryAccountKey"], "jamieburkart")
+            self.assertEqual(set(instagram["accounts"]), {"jamieburkart", "nycartc"})
+            jamie = instagram["accounts"]["jamieburkart"]
+            nycartc = instagram["accounts"]["nycartc"]
+            self.assertEqual(jamie["googleDriveCachePath"], "sources/instagram-drive-cache")
+            self.assertEqual(jamie["completedExportsRegistryPath"], "state/instagram-drive-completed-exports.json")
+            self.assertEqual(nycartc["googleDriveFolderId"], "drive-root")
+            self.assertEqual(nycartc["googleDriveTokenPath"], "state/google-drive-token.json")
+            self.assertEqual(nycartc["googleDriveCachePath"], "sources/instagram-accounts/nycartc/drive-cache")
+            self.assertEqual(nycartc["syncStatusPath"], "state/instagram-accounts/nycartc/sync-status.json")
+            self.assertEqual(nycartc["exportNamePrefix"], "instagram-nycartc-")
+            self.assertEqual(nycartc["ownerKind"], "organization")
+
+            code, _ = run_cli(
+                [
+                    "--root",
+                    str(root),
+                    "configure-instagram-account",
+                    "--account",
+                    "jamieburkart",
+                    "--profile-name",
+                    "jamieburkart",
+                    "--owner-display-name",
+                    "Jamie Burkart",
+                    "--owner-kind",
+                    "person",
+                    "--self-name",
+                    "Jamie",
+                    "--adopt-legacy",
+                ]
+            )
+            self.assertEqual(code, 0)
+            updated = json.loads((root / "localgraph.config.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                updated["imports"]["instagram"]["accounts"]["jamieburkart"]["ownerIdentityKey"],
+                "person:self",
+            )
+
     def test_init_accepts_repository_eval_and_script_entries(self) -> None:
         """Catch repository-owned eval tooling making the project root fail workspace validation."""
         with tempfile.TemporaryDirectory() as tmp:

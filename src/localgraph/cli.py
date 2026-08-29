@@ -14,8 +14,13 @@ from .automation import (
     run_daily_import,
 )
 from .drive import DriveAPIError, authenticate_google_drive, configure_google_drive_api, pull_google_drive_folder
+from .facebook_accounts import configure_facebook_account, exclude_facebook_account, facebook_accounts_status
+from .facebook import scan_facebook_source
+from .facebook_sync import configure_facebook_baseline, install_facebook_sync, run_facebook_sync
 from .ingest import import_workspace_sources
 from .instagram import scan_instagram_source
+from .instagram_accounts import configure_instagram_account, instagram_accounts_status
+from .imessage_sync import imessage_status, install_imessage_sync, run_imessage_sync
 from .paths import Workspace
 from .render import render_views
 from .schema import connect, initialize_schema
@@ -44,6 +49,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     scan = commands.add_parser("scan", help="Detect Instagram transfer exports without reading message bodies.")
     scan.add_argument("--source", help="Instagram source directory. Defaults to sources/instagram.")
+    facebook_scan = commands.add_parser(
+        "facebook-scan",
+        help="Detect Facebook message export packets without reading message bodies.",
+    )
+    facebook_scan.add_argument("--source", help="Facebook source directory. Defaults to sources/facebook.")
 
     ingest = commands.add_parser("import", help="Import Instagram and iMessage messages into canonical SQLite state.")
     ingest.add_argument("--instagram-source", help="Instagram source directory. Defaults to sources/instagram.")
@@ -88,6 +98,98 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Exact completed instagram-* folder name created by the verified all-history export.",
     )
+    configure_baseline.add_argument(
+        "--account",
+        help="Configured Instagram account key. Omit for a legacy singleton workspace.",
+    )
+
+    configure_account = commands.add_parser(
+        "configure-instagram-account",
+        help="Add or update one account in the multi-account Instagram registry.",
+    )
+    configure_account.add_argument("--account", required=True, help="Stable local account key, usually the username.")
+    configure_account.add_argument("--profile-name", required=True, help="Instagram profile username without @.")
+    configure_account.add_argument("--owner-display-name", required=True, help="Display name for the exporting identity.")
+    configure_account.add_argument("--owner-kind", choices=("person", "organization"), required=True)
+    configure_account.add_argument("--self-name", action="append", default=[], help="Participant name belonging to this account. May be repeated.")
+    configure_account.add_argument("--export-name-prefix", help="Exact Meta export folder prefix. Defaults to instagram-<profile>-." )
+    configure_account.add_argument("--adopt-legacy", action="store_true", help="Reuse the existing singleton cache, registry, mirror, and status paths.")
+    configure_account.add_argument("--reuse-primary-drive", action="store_true", help="Reuse the primary account's Drive folder and read-only OAuth token.")
+    configure_account.add_argument("--primary", action="store_true", help="Make this the primary Instagram account.")
+
+    commands.add_parser(
+        "instagram-accounts",
+        help="List configured Instagram accounts and body-free sync health.",
+    )
+
+    configure_facebook = commands.add_parser(
+        "configure-facebook-account",
+        help="Add or update one Facebook profile or managed Page in the private account registry.",
+    )
+    configure_facebook.add_argument("--account", required=True, help="Stable local account key.")
+    configure_facebook.add_argument("--display-name", required=True, help="Facebook profile or Page name.")
+    configure_facebook.add_argument("--account-type", choices=("profile", "page"), required=True)
+    configure_facebook.add_argument(
+        "--provider-state",
+        choices=("active", "deactivated", "unknown"),
+        default="active",
+    )
+    configure_facebook.add_argument("--self-name", action="append", default=[], help="Export participant name belonging to this account. May be repeated.")
+    configure_facebook.add_argument("--export-name-prefix", help="Exact provider export folder prefix. Defaults to facebook-<account>-.")
+    configure_facebook.add_argument("--reuse-instagram-drive", action="store_true", help="Reuse the configured Instagram Drive container and read-only token.")
+    configure_facebook.add_argument("--disabled", action="store_true", help="Keep the record visible but skip automated imports.")
+
+    exclude_facebook = commands.add_parser(
+        "exclude-facebook-account",
+        help="Permanently remove an account from synchronization and block re-enrollment.",
+    )
+    exclude_facebook.add_argument("--account", required=True, help="Stable local account key.")
+    exclude_facebook.add_argument("--reason", default="privacy-exclusion", help="Private exclusion reason code.")
+
+    commands.add_parser(
+        "facebook-accounts",
+        help="List configured Facebook profiles and Pages with body-free sync health.",
+    )
+    configure_facebook_baseline_parser = commands.add_parser(
+        "configure-facebook-baseline",
+        help="Record a verified one-time all-history Facebook Messages export for one account.",
+    )
+    configure_facebook_baseline_parser.add_argument("--account", required=True)
+    configure_facebook_baseline_parser.add_argument("--export-name", required=True)
+    facebook_sync = commands.add_parser(
+        "facebook-sync",
+        help="Import materialized Facebook profile and Page message packets and refresh canonical views.",
+    )
+    facebook_sync.add_argument("--no-render", action="store_true", help="Do not render views after import.")
+
+    install_facebook = commands.add_parser(
+        "install-facebook-sync",
+        help="Install an hourly macOS Facebook message sync LaunchAgent.",
+    )
+    install_facebook.add_argument("--interval-minutes", type=int, default=60)
+    install_facebook.add_argument("--label", default="com.openhouse.localgraph.facebook-sync")
+    install_facebook.add_argument("--dry-run", action="store_true")
+
+    imessage_sync = commands.add_parser(
+        "imessage-sync",
+        help="Snapshot the live macOS Messages database and atomically refresh canonical iMessage state.",
+    )
+    imessage_sync.add_argument("--source-db", help="Live chat.db path. Defaults to ~/Library/Messages/chat.db.")
+    imessage_sync.add_argument("--me", default="Me", help="Display name for your own identity. Defaults to 'Me'.")
+    imessage_sync.add_argument("--me-imessage", action="append", default=[], help="Self handle. May be repeated.")
+    imessage_sync.add_argument("--no-render", action="store_true", help="Do not render views after import.")
+
+    commands.add_parser("imessage-status", help="Report body-free Apple Messages freshness and health.")
+
+    install_imessage = commands.add_parser(
+        "install-imessage-sync",
+        help="Install an hourly macOS Apple Messages sync LaunchAgent.",
+    )
+    install_imessage.add_argument("--source-db", help="Live chat.db path. Defaults to ~/Library/Messages/chat.db.")
+    install_imessage.add_argument("--me", default="Me", help="Display name for your own identity. Defaults to 'Me'.")
+    install_imessage.add_argument("--interval-minutes", type=int, default=60)
+    install_imessage.add_argument("--label", default="com.openhouse.localgraph.imessage-sync")
+    install_imessage.add_argument("--dry-run", action="store_true")
 
     drive_pull = commands.add_parser("drive-pull", help="Pull a private Google Drive folder into the local Instagram cache.")
     drive_pull.add_argument("--folder-id", help="Google Drive folder ID. Defaults to configured imports.instagram.googleDriveFolderId.")
@@ -154,6 +256,11 @@ def main(argv: list[str] | None = None) -> int:
             summary = command_doctor(workspace)
         elif args.command == "scan":
             summary = command_scan(workspace, source=args.source)
+        elif args.command == "facebook-scan":
+            source_path = Path(args.source).expanduser() if args.source else workspace.facebook_source_dir
+            if not source_path.is_absolute():
+                source_path = workspace.root / source_path
+            summary = scan_facebook_source(source_path)
         elif args.command == "import":
             summary = command_import(
                 workspace,
@@ -184,7 +291,98 @@ def main(argv: list[str] | None = None) -> int:
                 token_path=args.token_path,
             )
         elif args.command == "configure-instagram-baseline":
-            summary = configure_instagram_baseline(workspace, args.export_name)
+            summary = configure_instagram_baseline(workspace, args.export_name, account_key=args.account)
+        elif args.command == "configure-instagram-account":
+            summary = configure_instagram_account(
+                workspace,
+                account_key=args.account,
+                profile_name=args.profile_name,
+                owner_display_name=args.owner_display_name,
+                owner_kind=args.owner_kind,
+                self_names=args.self_name,
+                export_name_prefix=args.export_name_prefix,
+                adopt_legacy=args.adopt_legacy,
+                reuse_primary_drive=args.reuse_primary_drive,
+                primary=args.primary,
+            )
+        elif args.command == "instagram-accounts":
+            summary = instagram_accounts_status(workspace)
+        elif args.command == "configure-facebook-account":
+            summary = configure_facebook_account(
+                workspace,
+                account_key=args.account,
+                display_name=args.display_name,
+                account_type=args.account_type,
+                provider_state=args.provider_state,
+                self_names=args.self_name,
+                export_name_prefix=args.export_name_prefix,
+                reuse_instagram_drive=args.reuse_instagram_drive,
+                enabled=not args.disabled,
+            )
+        elif args.command == "exclude-facebook-account":
+            summary = exclude_facebook_account(
+                workspace,
+                account_key=args.account,
+                reason=args.reason,
+            )
+        elif args.command == "facebook-accounts":
+            summary = facebook_accounts_status(workspace)
+        elif args.command == "configure-facebook-baseline":
+            summary = configure_facebook_baseline(
+                workspace,
+                account_key=args.account,
+                export_name=args.export_name,
+            )
+        elif args.command == "facebook-sync":
+            with instagram_sync_lock(workspace) as acquired:
+                if not acquired:
+                    summary = {
+                        "workspace": str(workspace.root),
+                        "facebookSync": {
+                            "schemaVersion": 1,
+                            "status": "skipped-concurrent",
+                            "lockPath": str(workspace.state_dir / "instagram-sync.lock"),
+                        },
+                    }
+                else:
+                    summary = run_facebook_sync(workspace, render=not args.no_render)
+        elif args.command == "install-facebook-sync":
+            summary = install_facebook_sync(
+                workspace,
+                interval_minutes=args.interval_minutes,
+                label=args.label,
+                dry_run=args.dry_run,
+            )
+        elif args.command == "imessage-sync":
+            with instagram_sync_lock(workspace) as acquired:
+                if not acquired:
+                    summary = {
+                        "workspace": str(workspace.root),
+                        "imessageSync": {
+                            "schemaVersion": 1,
+                            "status": "skipped-concurrent",
+                            "lockPath": str(workspace.state_dir / "instagram-sync.lock"),
+                        },
+                    }
+                else:
+                    summary = run_imessage_sync(
+                        workspace,
+                        live_db_path=Path(args.source_db) if args.source_db else None,
+                        me_name=args.me,
+                        me_handles=args.me_imessage,
+                        render=not args.no_render,
+                    )
+        elif args.command == "imessage-status":
+            summary = imessage_status(workspace)
+        elif args.command == "install-imessage-sync":
+            summary = install_imessage_sync(
+                workspace,
+                interval_minutes=args.interval_minutes,
+                label=args.label,
+                live_db_path=Path(args.source_db) if args.source_db else None,
+                me_name=args.me,
+                dry_run=args.dry_run,
+            )
         elif args.command == "drive-pull":
             summary = command_drive_pull(
                 workspace,

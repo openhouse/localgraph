@@ -5,7 +5,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PRIVATE_DIRECTORY_NAMES = ("sources", "state", "objects", "views", "annotations", "exports")
-VIEW_DIRECTORY_NAMES = ("people", "groups", "threads", "projects", "tags", "_system")
+VIEW_DIRECTORY_NAMES = (
+    "people",
+    "groups",
+    "threads",
+    "instagram-accounts",
+    "facebook-accounts",
+    "projects",
+    "tags",
+    "_system",
+)
 
 
 @dataclass(frozen=True)
@@ -64,12 +73,20 @@ class Workspace:
         return self.sources_dir / "instagram"
 
     @property
+    def facebook_source_dir(self) -> Path:
+        return self.sources_dir / "facebook"
+
+    @property
     def imessage_source_dir(self) -> Path:
         return self.sources_dir / "imessage"
 
     @property
     def imessage_chat_db_path(self) -> Path:
         return self.imessage_source_dir / "chat.db"
+
+    @property
+    def imessage_sync_status_path(self) -> Path:
+        return self.state_dir / "imessage-sync-status.json"
 
     def plan(self) -> dict[str, object]:
         return {
@@ -110,6 +127,7 @@ class Workspace:
         for directory in self.view_directories:
             directory.mkdir(parents=True, exist_ok=True)
         self.instagram_source_dir.mkdir(parents=True, exist_ok=True)
+        self.facebook_source_dir.mkdir(parents=True, exist_ok=True)
         self.imessage_source_dir.mkdir(parents=True, exist_ok=True)
         self._write_config(force=force)
         self._write_private_marker()
@@ -147,6 +165,10 @@ class Workspace:
                     "googleDriveFolderId": None,
                     "googleDriveCachePath": "sources/instagram-drive-cache",
                     "googleDriveTokenPath": "state/google-drive-token.json",
+                },
+                "facebook": {
+                    "localPath": "sources/facebook",
+                    "accounts": {},
                 },
                 "imessage": {
                     "localPath": "sources/imessage/chat.db",

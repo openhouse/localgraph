@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "suite": "imessage-messages",
+  "description": "Deterministic consistency, privacy, replacement, and freshness gates for live Apple Messages snapshots.",
+  "cases": [
+    {
+      "id": "test_imessage_sync.IMessageSyncTests.test_snapshot_reports_actionable_full_disk_access_failure",
+      "criterion": "A macOS background privacy denial names Full Disk Access, the exact executable, and the protected source path instead of emitting an opaque SQLite failure."
+    },
+    {
+      "id": "test_imessage_sync.IMessageSyncTests.test_sync_snapshots_uncheckpointed_wal_messages_and_reports_body_free_freshness",
+      "criterion": "The read-only online snapshot includes committed messages still present only in chat.db-wal and emits body-free freshness metadata."
+    },
+    {
+      "id": "test_imessage_sync.IMessageSyncTests.test_sync_rebuilds_imessage_projection_so_source_deletions_propagate",
+      "criterion": "Each verified live snapshot replaces only the iMessage projection so source deletions propagate without disturbing other source kinds."
+    },
+    {
+      "id": "test_imessage_sync.IMessageSyncTests.test_failed_snapshot_preserves_last_known_good_snapshot_projection_and_success_time",
+      "criterion": "A missing or privacy-blocked live database preserves the last known good snapshot and canonical projection while recording degraded health."
+    },
+    {
+      "id": "test_imessage_sync.IMessageSyncTests.test_empty_candidate_restores_last_known_good_snapshot_and_projection",
+      "criterion": "A valid-schema but unexpectedly empty candidate cannot replace a populated last known good snapshot or canonical projection."
+    },
+    {
+      "id": "test_imessage_sync.IMessageSyncTests.test_render_failure_rolls_back_candidate_projection_and_snapshot",
+      "criterion": "A failed directory render cannot leave canonical iMessage state ahead of the restored last-known-good snapshot."
+    },
+    {
+      "id": "test_imessage_sync.IMessageSyncTests.test_imessage_sync_command_uses_the_shared_workspace_writer_lock",
+      "criterion": "Manual and scheduled Apple Messages refreshes share the same single-writer lock as Instagram and Facebook."
+    },
+    {
+      "id": "test_imessage_sync.IMessageSyncTests.test_imessage_sync_launchagent_runs_hourly_at_login_from_application_support",
+      "criterion": "The private macOS LaunchAgent runs hourly and at login from Application Support using a snapshotted runtime."
+    },
+    {
+      "id": "test_imessage_sync.IMessageSyncTests.test_imessage_status_reports_counts_and_failure_state_without_message_content",
+      "criterion": "Operator status exposes bounded freshness, counts, and failure state without message bodies."
+    },
+    {
+      "id": "test_imessage_sync.IMessageSyncTests.test_snapshot_closes_every_sqlite_connection_without_resource_warnings",
+      "criterion": "Every hourly snapshot closes its SQLite descriptors so repeated launchd runs do not leak resources."
+    }
+  ]
+}

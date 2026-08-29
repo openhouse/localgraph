@@ -28,6 +28,7 @@ from .ingest import (
     import_instagram_source,
 )
 from .instagram import detect_export_root, scan_instagram_source
+from .instagram_accounts import InstagramAccount, instagram_accounts
 from .paths import Workspace
 from .render import render_views
 from .schema import connect, initialize_schema
@@ -98,9 +99,14 @@ def configure_google_drive_source(workspace: Workspace, source_path: Path) -> di
     }
 
 
-def configure_instagram_baseline(workspace: Workspace, export_name: str) -> dict[str, object]:
+def configure_instagram_baseline(
+    workspace: Workspace,
+    export_name: str,
+    *,
+    account_key: str | None = None,
+) -> dict[str, object]:
     workspace.ensure_workspace(force=False)
-    completed = completed_instagram_export_paths(workspace)
+    completed = completed_instagram_export_paths(workspace, account_key=account_key)
     matches = [path for path in completed if path.name == export_name]
     if not matches:
         raise ValueError(f"completed Instagram export is not available locally: {export_name}")
@@ -108,15 +114,25 @@ def configure_instagram_baseline(workspace: Workspace, export_name: str) -> dict
         raise ValueError(f"Instagram baseline export name is ambiguous: {export_name}")
     config = load_config(workspace)
     instagram = config.setdefault("imports", {}).setdefault("instagram", {})  # type: ignore[union-attr]
-    instagram["baselineExportName"] = export_name
-    instagram["baselineRecordedAt"] = _now_iso()
+    if account_key is None:
+        target = instagram
+    else:
+        accounts = instagram.get("accounts") if isinstance(instagram, dict) else None
+        target = accounts.get(account_key) if isinstance(accounts, dict) else None
+        if not isinstance(target, dict):
+            raise ValueError(f"Instagram account is not configured: {account_key}")
+    target["baselineExportName"] = export_name
+    target["baselineRecordedAt"] = _now_iso()
     write_config(workspace, config)
-    return {
+    result: dict[str, object] = {
         "baselineExportName": export_name,
         "baselineExportPath": str(matches[0]),
         "historyCoverage": "complete-through-latest-export",
         "config": str(workspace.config_path),
     }
+    if account_key is not None:
+        result["accountKey"] = account_key
+    return result
 
 
 def run_daily_import(
@@ -135,6 +151,17 @@ def run_daily_import(
     replace_instagram_snapshot: bool = False,
 ) -> dict[str, object]:
     workspace.ensure_workspace(force=False)
+    configured_accounts = instagram_accounts(workspace)
+    if configured_accounts and not skip_instagram and instagram_drive_source is None:
+        return run_multi_account_instagram_sync(
+            workspace,
+            accounts=configured_accounts,
+            imessage_db=imessage_db,
+            me_name=me_name,
+            me_imessage_handles=me_imessage_handles or [],
+            skip_imessage=skip_imessage,
+            render=render,
+        )
     drive_pull: dict[str, object] | None = None
     drive_pull_error: str | None = None
     resolution: DriveSourceResolution | None = None
@@ -284,6 +311,229 @@ def run_daily_import(
     return summary
 
 
+@dataclass
+class InstagramAccountPreparation:
+    account: InstagramAccount
+    status: str
+    origin: str
+    sources: list[Path] = field(default_factory=list)
+    drive_pull: dict[str, object] | None = None
+    error: str | None = None
+
+    @property
+    def ready(self) -> bool:
+        return bool(self.sources)
+
+
+def run_multi_account_instagram_sync(
+    workspace: Workspace,
+    *,
+    accounts: list[InstagramAccount],
+    imessage_db: Path | None,
+    me_name: str,
+    me_imessage_handles: list[str],
+    skip_imessage: bool,
+    render: bool,
+) -> dict[str, object]:
+    checked_at = _now_iso()
+    preparations = [_prepare_instagram_account(workspace, account) for account in accounts]
+    all_ready = all(preparation.ready for preparation in preparations)
+    source_results: list[SourceImportResult] = []
+    snapshot_replacement: dict[str, int] | None = None
+    rendered: dict[str, int] | None = None
+
+    with connect(workspace.database_path) as db:
+        initialize_schema(db)
+        if all_ready:
+            snapshot_replacement = clear_instagram_projection(db)
+            try:
+                for preparation in preparations:
+                    account = preparation.account
+                    for source in preparation.sources:
+                        source_results.append(
+                            import_instagram_source(
+                                db,
+                                source,
+                                me_name=account.owner_display_name,
+                                me_names=list(account.self_names),
+                                explicit=True,
+                                account_key=account.account_key,
+                                owner_identity_key=account.owner_identity_key,
+                                owner_kind=account.owner_kind,
+                                commit=False,
+                            )
+                        )
+                if any(result.status != "imported" or result.messages <= 0 for result in source_results):
+                    raise ValueError("refusing to replace Instagram projection with an empty account snapshot")
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            if not skip_imessage:
+                source_results.append(
+                    import_imessage_chat_db(
+                        db,
+                        imessage_db.expanduser().resolve() if imessage_db else workspace.imessage_chat_db_path,
+                        me_name=me_name,
+                        me_handles=me_imessage_handles,
+                        explicit=imessage_db is not None,
+                    )
+                )
+            if render:
+                source_scan = combined_instagram_source_scan(
+                    [source for preparation in preparations for source in preparation.sources]
+                )
+                rendered = render_views(db, workspace, source_scan=source_scan)
+        else:
+            for preparation in preparations:
+                source_results.append(
+                    SourceImportResult(
+                        "instagram",
+                        str(preparation.account.current_mirror_path),
+                        status=preparation.status if preparation.status == "pending" else "held",
+                        warnings=[preparation.error] if preparation.error else [],
+                    )
+                )
+
+    account_payload: dict[str, object] = {}
+    for preparation in preparations:
+        status = _instagram_account_sync_status(preparation, checked_at=checked_at)
+        _write_json_private_path(preparation.account.sync_status_path, status)
+        account_payload[preparation.account.account_key] = {
+            "account": preparation.account.to_public_json(),
+            "sync": status,
+            "googleDrivePull": preparation.drive_pull
+            or {"status": "error" if preparation.error else "not-configured", "error": preparation.error},
+        }
+
+    statuses = [str(item["sync"]["status"]) for item in account_payload.values()]  # type: ignore[index]
+    if any(status == "pending" for status in statuses):
+        aggregate_status = "pending"
+    elif any(status == "degraded" for status in statuses):
+        aggregate_status = "degraded"
+    else:
+        aggregate_status = "current"
+    aggregate = {
+        "schemaVersion": 2,
+        "status": aggregate_status,
+        "checkedAt": checked_at,
+        "accountsConfigured": len(preparations),
+        "accountsReady": sum(preparation.ready for preparation in preparations),
+        "projectionUpdated": all_ready,
+        "accounts": {
+            key: {
+                "status": value["sync"]["status"],  # type: ignore[index]
+                "historyCoverage": value["sync"]["historyCoverage"],  # type: ignore[index]
+                "messageFiles": value["sync"]["messageFiles"],  # type: ignore[index]
+            }
+            for key, value in account_payload.items()
+        },
+    }
+    _write_json_private_path(workspace.state_dir / "instagram-accounts-sync-status.json", aggregate)
+    result = _combined_import_result(source_results)
+    if rendered is not None:
+        result["render"] = rendered
+    summary = {
+        "startedAt": checked_at,
+        "workspace": str(workspace.root),
+        "instagramAccounts": account_payload,
+        "instagramSync": aggregate,
+        "instagram": {
+            "mode": "multi-account",
+            "snapshotReplacement": snapshot_replacement,
+            "importPaths": [
+                str(source) for preparation in preparations for source in preparation.sources
+            ],
+        },
+        "result": result,
+    }
+    run_log = append_daily_run_log(workspace, summary)
+    summary["runLog"] = str(run_log)
+    return summary
+
+
+def _prepare_instagram_account(
+    workspace: Workspace,
+    account: InstagramAccount,
+) -> InstagramAccountPreparation:
+    pull_payload: dict[str, object] | None = None
+    error: str | None = None
+    if account.google_drive_folder_id:
+        try:
+            pulled = pull_configured_google_drive_source(workspace, account_key=account.account_key)
+            if pulled is not None:
+                pull_payload = pulled.to_json()
+                for completed_export in pulled.completed_export_paths:
+                    activate_instagram_account_current_mirror(account, completed_export)
+        except DriveAPIError as exc:
+            error = str(exc)
+    current = valid_instagram_account_current_mirror(account)
+    if current is not None:
+        if error:
+            status, origin = "degraded", "google-drive-last-known-good"
+        elif pull_payload is not None:
+            status, origin = "current", "google-drive-api-current"
+        else:
+            status, origin = "local-current", "local-current"
+        return InstagramAccountPreparation(
+            account,
+            status,
+            origin,
+            [current],
+            drive_pull=pull_payload,
+            error=error,
+        )
+    if account.google_drive_local_path is not None:
+        sources = [
+            source
+            for source in resolve_instagram_import_sources(
+                account.google_drive_local_path,
+                all_materialized_exports=True,
+            )
+            if source.name.startswith(account.export_name_prefix)
+        ]
+        if sources:
+            return InstagramAccountPreparation(account, "local-current", "configured-local", sources)
+    return InstagramAccountPreparation(account, "pending", "not-materialized", error=error)
+
+
+def _instagram_account_sync_status(
+    preparation: InstagramAccountPreparation,
+    *,
+    checked_at: str,
+) -> dict[str, object]:
+    account = preparation.account
+    exports: list[str] = []
+    message_files = 0
+    for source in preparation.sources:
+        scan = scan_instagram_source(source)
+        message_files += int(scan["totalMessageFiles"])
+        exports.extend(
+            str(item["name"])
+            for item in scan["exports"]  # type: ignore[union-attr]
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        )
+    baseline_present = account.baseline_export_name in exports if account.baseline_export_name else False
+    previous = _load_json_path(account.sync_status_path)
+    last_success = checked_at if preparation.status in {"current", "local-current"} else previous.get("lastSuccessfulSyncAt")
+    return {
+        "schemaVersion": 2,
+        "accountKey": account.account_key,
+        "profileName": account.profile_name,
+        "status": preparation.status,
+        "checkedAt": checked_at,
+        "lastSuccessfulSyncAt": last_success,
+        "origin": preparation.origin,
+        "localMirrorPath": str(account.current_mirror_path) if preparation.ready else None,
+        "messageFiles": message_files,
+        "completedExports": len(set(exports)),
+        "historyCoverage": "complete-through-latest-export" if baseline_present else "baseline-required",
+        "baselineExportName": account.baseline_export_name,
+        "pullStatus": preparation.drive_pull.get("status") if preparation.drive_pull else ("error" if preparation.error else "not-configured"),
+        "lastError": preparation.error,
+    }
+
+
 def resolve_instagram_drive_source(workspace: Workspace, *, explicit: Path | None = None) -> DriveSourceResolution:
     warnings: list[str] = []
     if explicit is not None:
@@ -417,6 +667,40 @@ def valid_instagram_current_mirror(workspace: Workspace) -> Path | None:
     return current
 
 
+def activate_instagram_account_current_mirror(account: InstagramAccount, export_source: Path) -> Path:
+    export = export_source.expanduser().resolve()
+    if int(scan_instagram_source(export)["totalMessageFiles"]) <= 0:
+        raise ValueError(f"refusing to publish an Instagram mirror without message files: {export}")
+    current = account.current_mirror_path
+    completed = account.completed_mirror_path
+    if current.exists() and not current.is_symlink():
+        raise ValueError(f"refusing to replace a non-symlink Instagram account mirror path: {current}")
+    if completed.exists() and not completed.is_dir():
+        raise ValueError(f"refusing to replace a non-directory Instagram account completed mirror: {completed}")
+    current.parent.mkdir(parents=True, exist_ok=True)
+    completed.mkdir(parents=True, exist_ok=True)
+    if current.is_symlink() and current.exists():
+        previous = current.resolve()
+        if previous != completed.resolve() and int(scan_instagram_source(previous)["totalMessageFiles"]) > 0:
+            _publish_completed_export_link(completed, previous)
+    _publish_completed_export_link(completed, export)
+    temporary = current.with_name(f".{current.name}.{os.getpid()}.tmp")
+    if temporary.is_symlink() or temporary.exists():
+        temporary.unlink()
+    temporary.symlink_to(Path(os.path.relpath(completed, start=current.parent)), target_is_directory=True)
+    os.replace(temporary, current)
+    return current
+
+
+def valid_instagram_account_current_mirror(account: InstagramAccount) -> Path | None:
+    current = account.current_mirror_path
+    if not current.exists():
+        return None
+    if int(scan_instagram_source(current)["totalMessageFiles"]) <= 0:
+        return None
+    return current
+
+
 def _materialized_instagram_export_sources(source: Path) -> list[Path]:
     if _looks_like_instagram_export(source):
         return [source.expanduser().resolve()]
@@ -530,7 +814,7 @@ def install_instagram_sync(
         runtime_dir=runtime_dir,
         log_path=log_dir / "instagram-sync.log",
         me_name=me_name,
-        me_instagram_names=me_instagram_names or [],
+        me_instagram_names=[] if instagram_accounts(workspace) else (me_instagram_names or []),
     )
     plist = interval_launchd_plist(
         label=label,
@@ -762,6 +1046,25 @@ def write_instagram_sync_status(workspace: Workspace, status: dict[str, object])
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(f"{json.dumps(status, indent=2, sort_keys=True)}\n", encoding="utf-8")
+    temporary.chmod(0o600)
+    os.replace(temporary, path)
+    return path
+
+
+def _load_json_path(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_json_private_path(path: Path, payload: dict[str, object]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(f"{json.dumps(payload, indent=2, sort_keys=True)}\n", encoding="utf-8")
     temporary.chmod(0o600)
     os.replace(temporary, path)
     return path

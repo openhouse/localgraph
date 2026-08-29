@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "suite": "facebook-messages",
+  "description": "Deterministic custody, identity, acquisition, and freshness gates for private Facebook profile and managed Page messages.",
+  "cases": [
+    {
+      "id": "test_facebook.FacebookTests.test_privacy_exclusion_removes_account_and_prevents_reconfiguration_or_import",
+      "criterion": "A privacy-excluded former-member profile is removed from active synchronization, cannot be re-enrolled, and cannot import even a packet left under its former private path."
+    },
+    {
+      "id": "test_facebook.FacebookTests.test_scan_facebook_source_finds_message_categories_without_reading_bodies",
+      "criterion": "Facebook inbox, archived, and request thread packets are discovered without reading or returning private message bodies."
+    },
+    {
+      "id": "test_facebook.FacebookTests.test_two_facebook_accounts_keep_threads_and_owner_identities_distinct",
+      "criterion": "Identical provider thread paths remain distinct per exporting profile or Page while a personal owner and organizational Page owner remain separate identities."
+    },
+    {
+      "id": "test_facebook.FacebookTests.test_facebook_registry_reports_profile_and_page_protocols_without_private_ids",
+      "criterion": "The body-free registry distinguishes profile and Page export surfaces, active state, all-time-lookback daily requirements, verified versus unverified recurrence support, and omits private provider IDs."
+    },
+    {
+      "id": "test_facebook.FacebookTests.test_facebook_sync_updates_ready_accounts_without_erasing_pending_pages",
+      "criterion": "A ready profile can advance without erasing a pending Page, and each newly materialized Page packet later joins the canonical projection and account views."
+    },
+    {
+      "id": "test_facebook.FacebookTests.test_facebook_sync_launchagent_runs_hourly_from_private_registry",
+      "criterion": "The Facebook freshness job runs hourly and at login from the private account registry without embedding account names in its command."
+    },
+    {
+      "id": "test_facebook.FacebookTests.test_configured_facebook_pull_uses_messages_only_scoped_paths_and_prefix",
+      "criterion": "An authenticated Facebook pull is isolated by account-specific prefix, private cache and manifest paths, and Messages-only provider subtrees."
+    },
+    {
+      "id": "test_facebook.FacebookTests.test_facebook_sync_pulls_authenticated_drive_before_import",
+      "criterion": "A configured Facebook account refreshes its authenticated Drive cache before importing and reporting body-free status."
+    },
+    {
+      "id": "test_facebook.FacebookTests.test_facebook_history_requires_account_specific_completed_baseline",
+      "criterion": "Fresh incremental Facebook packets cannot be labeled full history until that exact account has a materialized, explicitly recorded all-time baseline."
+    },
+    {
+      "id": "test_facebook.FacebookTests.test_shared_drive_discovery_error_is_source_neutral",
+      "criterion": "The shared Meta Drive discovery path reports a source-neutral pending condition instead of mislabeling Facebook acquisition as Instagram."
+    }
+  ]
+}

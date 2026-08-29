@@ -74,6 +74,8 @@ def render_views(db: sqlite3.Connection, workspace: Workspace, *, source_scan: d
             workspace.views_dir / "threads" / row["source_kind"] / stable_view_name(row["title"], row["source_thread_key"]),
             row,
         )
+    instagram_account_count = _write_instagram_account_views(workspace, threads)
+    facebook_account_count = _write_facebook_account_views(workspace, threads)
     _write_system_manifest(
         workspace,
         people=people,
@@ -83,7 +85,14 @@ def render_views(db: sqlite3.Connection, workspace: Workspace, *, source_scan: d
         source_scan=source_scan,
     )
 
-    result = {"people": len(people), "groups": len(groups), "threads": len(threads), "messages": message_count}
+    result = {
+        "people": len(people),
+        "groups": len(groups),
+        "threads": len(threads),
+        "messages": message_count,
+        "instagramAccounts": instagram_account_count,
+        "facebookAccounts": facebook_account_count,
+    }
     if source_scan is not None:
         result["sourceExports"] = len(source_scan["exports"])  # type: ignore[arg-type]
         result["sourceMessageFiles"] = int(source_scan["totalMessageFiles"])
@@ -640,6 +649,98 @@ def _write_thread_view(db: sqlite3.Connection, path: Path, row: sqlite3.Row) -> 
         encoding="utf-8",
     )
     (path / "messages.md").write_text(_thread_messages_markdown(row, messages), encoding="utf-8")
+
+
+def _write_instagram_account_views(workspace: Workspace, threads: list[sqlite3.Row]) -> int:
+    account_threads: dict[str, list[sqlite3.Row]] = {}
+    for thread in threads:
+        if thread["source_kind"] != "instagram":
+            continue
+        source_key = str(thread["source_thread_key"])
+        if ":" not in source_key:
+            continue
+        account_key, relative_key = source_key.split(":", 1)
+        if not account_key or not relative_key.startswith(("your_instagram_activity/", "messages/")):
+            continue
+        account_threads.setdefault(account_key, []).append(thread)
+
+    root = workspace.views_dir / "instagram-accounts"
+    root.mkdir(parents=True, exist_ok=True)
+    for account_key, rows in sorted(account_threads.items()):
+        account_root = root / account_key
+        thread_links = account_root / "threads"
+        thread_links.mkdir(parents=True, exist_ok=True)
+        desired: set[str] = set()
+        for row in rows:
+            view_name = stable_view_name(row["title"], row["source_thread_key"])
+            desired.add(view_name)
+            link = thread_links / view_name
+            target = workspace.views_dir / "threads" / "instagram" / view_name
+            if link.is_symlink() and link.resolve() == target.resolve():
+                continue
+            if link.exists() or link.is_symlink():
+                if link.is_symlink():
+                    link.unlink()
+                else:
+                    continue
+            link.symlink_to(Path(os.path.relpath(target, start=thread_links)), target_is_directory=True)
+        for existing in thread_links.iterdir():
+            if existing.is_symlink() and existing.name not in desired:
+                existing.unlink()
+        (account_root / "index.md").write_text(
+            f"# Instagram: @{account_key}\n\n"
+            f"- Threads: {len(rows)}\n"
+            "- Combined graph: [../../index.md](../../index.md)\n"
+            "- Account threads: [threads/](threads/)\n",
+            encoding="utf-8",
+        )
+    return len(account_threads)
+
+
+def _write_facebook_account_views(workspace: Workspace, threads: list[sqlite3.Row]) -> int:
+    account_threads: dict[str, list[sqlite3.Row]] = {}
+    for thread in threads:
+        if thread["source_kind"] != "facebook":
+            continue
+        source_key = str(thread["source_thread_key"])
+        if ":" not in source_key:
+            continue
+        account_key, relative_key = source_key.split(":", 1)
+        if not account_key or not relative_key.startswith(("your_facebook_activity/", "messages/")):
+            continue
+        account_threads.setdefault(account_key, []).append(thread)
+
+    root = workspace.views_dir / "facebook-accounts"
+    root.mkdir(parents=True, exist_ok=True)
+    for account_key, rows in sorted(account_threads.items()):
+        account_root = root / account_key
+        thread_links = account_root / "threads"
+        thread_links.mkdir(parents=True, exist_ok=True)
+        desired: set[str] = set()
+        for row in rows:
+            view_name = stable_view_name(row["title"], row["source_thread_key"])
+            desired.add(view_name)
+            link = thread_links / view_name
+            target = workspace.views_dir / "threads" / "facebook" / view_name
+            if link.is_symlink() and link.resolve() == target.resolve():
+                continue
+            if link.exists() or link.is_symlink():
+                if link.is_symlink():
+                    link.unlink()
+                else:
+                    continue
+            link.symlink_to(Path(os.path.relpath(target, start=thread_links)), target_is_directory=True)
+        for existing in thread_links.iterdir():
+            if existing.is_symlink() and existing.name not in desired:
+                existing.unlink()
+        (account_root / "index.md").write_text(
+            f"# Facebook: {account_key}\n\n"
+            f"- Threads: {len(rows)}\n"
+            "- Combined graph: [../../index.md](../../index.md)\n"
+            "- Account threads: [threads/](threads/)\n",
+            encoding="utf-8",
+        )
+    return len(account_threads)
 
 
 def _thread_messages_markdown(row: sqlite3.Row, messages: list[sqlite3.Row]) -> str:
