@@ -14,6 +14,71 @@ from localgraph.cli import main
 
 
 class FacebookTests(unittest.TestCase):
+    def test_page_sync_requires_individual_export_capability_verification(self) -> None:
+        """Catch a discovered Page being onboarded before its own export surface is verified."""
+        from localgraph.facebook_sync import configure_facebook_baseline
+        from localgraph.paths import Workspace
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "graph"
+            configure_facebook_fixture(root, "example-page", "Example Page", "page", verify_page=False)
+            write_facebook_packet(
+                root / "sources/facebook-accounts/example-page/incoming/facebook-example-page-2026-08-29-export",
+                owner="Example Page",
+                content="must stay unimported until verified",
+            )
+
+            code, stdout = run_cli(["--root", str(root), "facebook-sync", "--no-render"])
+
+            self.assertEqual(code, 0)
+            before = json.loads(stdout)
+            self.assertEqual(before["facebookAccounts"]["example-page"]["sync"]["status"], "verification-required")
+            self.assertEqual(before["facebookSync"]["accountsEligible"], 0)
+            self.assertEqual(
+                before["facebookAccounts"]["example-page"]["account"]["exportCapability"]["providerSurface"],
+                "facebook-page-settings",
+            )
+            with self.assertRaisesRegex(ValueError, "export capability"):
+                configure_facebook_baseline(
+                    Workspace(root),
+                    account_key="example-page",
+                    export_name="facebook-example-page-2026-08-29-export",
+                )
+            with contextlib.closing(sqlite3.connect(root / "state/localgraph.sqlite")) as db:
+                self.assertEqual(
+                    db.execute(
+                        "SELECT COUNT(*) FROM messages JOIN threads ON threads.id = messages.thread_id "
+                        "WHERE threads.source_kind = 'facebook'"
+                    ).fetchone()[0],
+                    0,
+                )
+
+            code, stdout = run_cli(
+                [
+                    "--root",
+                    str(root),
+                    "verify-facebook-export-capability",
+                    "--account",
+                    "example-page",
+                    "--capability",
+                    "supported",
+                    "--provider-surface",
+                    "facebook-page-settings",
+                    "--observed-at",
+                    "2026-08-29T22:00:00Z",
+                ]
+            )
+            self.assertEqual(code, 0)
+            verified = json.loads(stdout)
+            self.assertEqual(verified["exportCapability"]["status"], "verified-supported")
+            code, stdout = run_cli(["--root", str(root), "facebook-sync", "--no-render"])
+
+            self.assertEqual(code, 0)
+            after = json.loads(stdout)
+            self.assertEqual(after["facebookAccounts"]["example-page"]["sync"]["status"], "local-current")
+            self.assertEqual(after["facebookSync"]["accountsEligible"], 1)
+            self.assertEqual(after["result"]["totals"]["messages"], 1)
+
     def test_privacy_exclusion_removes_account_and_prevents_reconfiguration_or_import(self) -> None:
         """Catch a former member's personal profile being re-enrolled or imported after exclusion."""
         import localgraph.facebook_accounts as accounts_module
@@ -499,7 +564,14 @@ def run_cli(arguments: list[str]) -> tuple[int, str]:
     return code, stream.getvalue()
 
 
-def configure_facebook_fixture(root: Path, key: str, display_name: str, account_type: str) -> None:
+def configure_facebook_fixture(
+    root: Path,
+    key: str,
+    display_name: str,
+    account_type: str,
+    *,
+    verify_page: bool = True,
+) -> None:
     code, _ = run_cli(
         [
             "--root",
@@ -517,6 +589,17 @@ def configure_facebook_fixture(root: Path, key: str, display_name: str, account_
     )
     if code != 0:
         raise AssertionError(f"failed to configure Facebook fixture: {key}")
+    if account_type == "page" and verify_page:
+        from localgraph.facebook_accounts import verify_facebook_export_capability
+        from localgraph.paths import Workspace
+
+        verify_facebook_export_capability(
+            Workspace(root),
+            account_key=key,
+            capability="supported",
+            provider_surface="facebook-page-settings",
+            observed_at="2026-08-29T22:00:00Z",
+        )
 
 
 def write_facebook_packet(export_root: Path, *, owner: str, content: str) -> None:

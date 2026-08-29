@@ -31,6 +31,10 @@ def configure_facebook_baseline(
 ) -> dict[str, object]:
     workspace.ensure_workspace(force=False)
     account = facebook_account(workspace, account_key)
+    if account.account_type == "page" and account.export_capability_status != "verified-supported":
+        raise ValueError(
+            f"Facebook Page export capability must be individually verified before recording a baseline: {account.account_key}"
+        )
     matches = [source for source in _account_sources(account) if source.name == export_name]
     if not matches:
         raise ValueError(f"completed Facebook export is not available locally for {account.account_key}: {export_name}")
@@ -55,7 +59,7 @@ def configure_facebook_baseline(
 def run_facebook_sync(workspace: Workspace, *, render: bool = True) -> dict[str, object]:
     """Import every locally materialized Facebook account independently."""
     workspace.ensure_workspace(force=False)
-    accounts = facebook_accounts(workspace)
+    accounts = facebook_accounts(workspace, enabled_only=False)
     checked_at = _now_iso()
     source_results: list[SourceImportResult] = []
     account_payload: dict[str, object] = {}
@@ -65,7 +69,7 @@ def run_facebook_sync(workspace: Workspace, *, render: bool = True) -> dict[str,
         for account in accounts:
             drive_pull: dict[str, object] | None = None
             drive_error: str | None = None
-            if account.google_drive_folder_id:
+            if account.sync_eligible and account.google_drive_folder_id:
                 try:
                     pulled = pull_configured_facebook_source(workspace, account_key=account.account_key)
                     if pulled is not None:
@@ -73,7 +77,24 @@ def run_facebook_sync(workspace: Workspace, *, render: bool = True) -> dict[str,
                 except DriveAPIError as exc:
                     drive_error = str(exc)
             sources = _account_sources(account)
-            if sources:
+            if not account.sync_eligible:
+                result = SourceImportResult("facebook", str(account.source_path), status="held")
+                result.warnings.append(
+                    "Facebook account is not eligible for synchronization until its own export capability is verified"
+                )
+                source_results.append(result)
+                status = _account_status(
+                    account,
+                    sources,
+                    checked_at=checked_at,
+                    status=(
+                        "verification-required"
+                        if account.account_type == "page" and account.export_capability_status == "unverified"
+                        else "not-eligible"
+                    ),
+                    drive_error=None,
+                )
+            elif sources:
                 _clear_facebook_account_projection(db, account.account_key)
                 imported_for_account: list[SourceImportResult] = []
                 try:
@@ -130,12 +151,15 @@ def run_facebook_sync(workspace: Workspace, *, render: bool = True) -> dict[str,
             rendered = render_views(db, workspace)
 
     statuses = [str(item["sync"]["status"]) for item in account_payload.values()]  # type: ignore[index]
+    eligible = [account for account in accounts if account.sync_eligible]
     if not statuses:
         aggregate_status = "not-configured"
-    elif "pending" in statuses:
-        aggregate_status = "pending"
     elif "degraded" in statuses:
         aggregate_status = "degraded"
+    elif "pending" in statuses:
+        aggregate_status = "pending"
+    elif any(status == "verification-required" for status in statuses):
+        aggregate_status = "verification-required"
     else:
         aggregate_status = "current"
     aggregate = {
@@ -143,7 +167,11 @@ def run_facebook_sync(workspace: Workspace, *, render: bool = True) -> dict[str,
         "status": aggregate_status,
         "checkedAt": checked_at,
         "accountsConfigured": len(accounts),
-        "accountsReady": sum(status != "pending" for status in statuses),
+        "accountsEligible": len(eligible),
+        "accountsReady": sum(
+            str(account_payload[account.account_key]["sync"]["status"]) in {"local-current", "current", "degraded"}  # type: ignore[index]
+            for account in eligible
+        ),
         "accounts": {
             key: {
                 "status": value["sync"]["status"],  # type: ignore[index]
@@ -315,6 +343,12 @@ def _account_status(
         "accountKey": account.account_key,
         "accountType": account.account_type,
         "providerState": account.provider_state,
+        "exportCapability": {
+            "status": account.export_capability_status,
+            "providerSurface": account.export_capability_provider_surface,
+            "verifiedAt": account.export_capability_verified_at,
+        },
+        "syncEligible": account.sync_eligible,
         "status": status,
         "checkedAt": checked_at,
         "lastSuccessfulSyncAt": checked_at if status in {"local-current", "degraded"} else previous.get("lastSuccessfulSyncAt"),

@@ -103,8 +103,10 @@ managed Page own separate incoming, authenticated-cache, baseline, and status
 paths. Ready accounts rebuild independently, so a Page waiting on provider
 authentication cannot erase a working personal-profile projection. Exact-prefix
 authenticated pulls are bounded to Facebook message subtrees. Page recurrence
-is represented as provider-verification-required until the Page settings surface
-proves it; management access is never treated as archive completion.
+is represented as provider-verification-required until that exact Page settings
+surface proves it. An unverified Page is not sync-eligible even when a matching
+local packet exists; capability evidence never propagates between Pages.
+Management access is never treated as archive completion.
 Privacy-excluded records are removed from the active registry and retained only
 as ignored private tombstones that prevent accidental re-enrollment. Scheduled
 runs never enumerate an excluded account.
@@ -118,6 +120,15 @@ validation, import, render, or unexpected-empty failure restores the prior snaps
 projection. The iMessage job runs at login and hourly from the internal
 Application Support runtime, shares the Meta jobs' single-writer lock, and
 writes body-free freshness to `state/imessage-sync-status.json`.
+
+The unified `status` layer composes these source-specific receipts without
+reading correspondence bodies. It inspects the three LaunchAgents, private
+authorization metadata, completed-packet and snapshot counts, canonical imports,
+rendered account views, and account-specific baseline state. Provider-observed
+`requested` and `preparing` events live in ignored lifecycle ledgers; delivery,
+import, render, currentness, and completeness are derived from local evidence.
+The state machine and finding contract are documented in
+`docs/source-health-and-acceptance.md`.
 
 Person views are portable context capsules. Generated files provide orientation
 (`index.md`, `llm-context.md`, `timeline.md`, `threads.md`, `groups.md`,

@@ -14,11 +14,21 @@ from .paths import Workspace
 ACCOUNT_KEY_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 
-def required_provider_export_protocol(account_type: str, export_name_prefix: str) -> dict[str, object]:
-    verified = account_type == "profile"
-    support = "verified-in-accounts-center" if verified else "provider-verification-required"
+def required_provider_export_protocol(
+    account_type: str,
+    export_name_prefix: str,
+    export_capability_status: str | None = None,
+) -> dict[str, object]:
+    verified = account_type == "profile" or export_capability_status == "verified-supported"
+    unsupported = export_capability_status == "verified-unsupported"
+    if verified:
+        support = "verified-in-accounts-center" if account_type == "profile" else "verified-for-this-page"
+    elif unsupported:
+        support = "verified-unsupported-for-this-page"
+    else:
+        support = "provider-verification-required"
     return {
-        "providerSurface": "meta-accounts-center" if verified else "facebook-page-settings",
+        "providerSurface": "meta-accounts-center" if account_type == "profile" else "facebook-page-settings",
         "destination": "google-drive" if verified else "provider-destination-verification-required",
         "information": ["messages"],
         "baseline": {"cadence": "once", "dateRange": "all-time", "support": support},
@@ -53,7 +63,18 @@ class FacebookAccount:
     source_path: Path
     sync_status_path: Path
     baseline_export_name: str | None
+    export_capability_status: str
+    export_capability_provider_surface: str | None
+    export_capability_verified_at: str | None
     enabled: bool = True
+
+    @property
+    def sync_eligible(self) -> bool:
+        if not self.enabled or self.provider_state != "active":
+            return False
+        if self.account_type == "page":
+            return self.export_capability_status == "verified-supported"
+        return self.export_capability_status != "verified-unsupported"
 
     def to_public_json(self) -> dict[str, object]:
         return {
@@ -71,9 +92,16 @@ class FacebookAccount:
             "sourcePath": str(self.source_path),
             "syncStatusPath": str(self.sync_status_path),
             "baselineExportName": self.baseline_export_name,
+            "exportCapability": {
+                "status": self.export_capability_status,
+                "providerSurface": self.export_capability_provider_surface,
+                "verifiedAt": self.export_capability_verified_at,
+            },
+            "syncEligible": self.sync_eligible,
             "requiredProviderExportProtocol": required_provider_export_protocol(
                 self.account_type,
                 self.export_name_prefix,
+                self.export_capability_status,
             ),
             "enabled": self.enabled,
         }
@@ -133,6 +161,12 @@ def configure_facebook_account(
         "enabled": enabled,
         **defaults,
     }
+    if "exportCapability" not in record:
+        record["exportCapability"] = {
+            "status": "verified-supported" if account_type == "profile" else "unverified",
+            "providerSurface": "meta-accounts-center" if account_type == "profile" else "facebook-page-settings",
+            "verifiedAt": None,
+        }
     if account_type == "profile" and not is_primary_profile:
         record["ownerIdentityKey"] = f"person:facebook:{key}"
     if reuse_instagram_drive:
@@ -154,6 +188,47 @@ def configure_facebook_account(
         "workspace": str(workspace.root),
         "primaryProfileAccountKey": facebook.get("primaryProfileAccountKey"),
         "account": account.to_public_json(),
+        "config": str(workspace.config_path),
+    }
+
+
+def verify_facebook_export_capability(
+    workspace: Workspace,
+    *,
+    account_key: str,
+    capability: str,
+    provider_surface: str,
+    observed_at: str,
+) -> dict[str, object]:
+    """Record Page-specific provider capability evidence before synchronization is allowed."""
+    workspace.ensure_workspace(force=False)
+    key = normalize_account_key(account_key)
+    if capability not in {"supported", "unsupported"}:
+        raise ValueError("Facebook export capability must be supported or unsupported")
+    surface = provider_surface.strip()
+    if not surface:
+        raise ValueError("Facebook export capability requires a provider surface")
+    _validate_observed_at(observed_at)
+    config = load_config(workspace)
+    facebook = config.get("imports", {}).get("facebook", {})
+    records = facebook.get("accounts") if isinstance(facebook, dict) else None
+    record = records.get(key) if isinstance(records, dict) else None
+    if not isinstance(record, dict):
+        raise ValueError(f"Facebook account is not configured: {key}")
+    if str(record.get("accountType") or "page") != "page":
+        raise ValueError("individual export capability verification is only required for Facebook Pages")
+    export_capability = {
+        "status": f"verified-{capability}",
+        "providerSurface": surface,
+        "verifiedAt": observed_at.strip(),
+    }
+    record["exportCapability"] = export_capability
+    _write_config(workspace, config)
+    return {
+        "workspace": str(workspace.root),
+        "accountKey": key,
+        "exportCapability": export_capability,
+        "syncEligible": capability == "supported" and str(record.get("providerState") or "unknown") == "active",
         "config": str(workspace.config_path),
     }
 
@@ -300,6 +375,15 @@ def _account_from_record(workspace: Workspace, key: str, value: object) -> Faceb
     if not isinstance(self_names, list):
         self_names = []
     local_path = value.get("googleDriveLocalPath")
+    capability = value.get("exportCapability")
+    if not isinstance(capability, dict):
+        capability = {}
+    capability_status = str(
+        capability.get("status")
+        or ("verified-supported" if account_type == "profile" else "unverified")
+    )
+    if capability_status not in {"unverified", "verified-supported", "verified-unsupported"}:
+        capability_status = "unverified"
     return FacebookAccount(
         account_key=normalize_account_key(str(value.get("accountKey") or key)),
         display_name=str(value.get("displayName") or key),
@@ -323,6 +407,15 @@ def _account_from_record(workspace: Workspace, key: str, value: object) -> Faceb
         source_path=_resolve_path(workspace, str(value.get("sourcePath") or defaults["sourcePath"])),
         sync_status_path=_resolve_path(workspace, str(value.get("syncStatusPath") or defaults["syncStatusPath"])),
         baseline_export_name=str(value["baselineExportName"]) if value.get("baselineExportName") else None,
+        export_capability_status=capability_status,
+        export_capability_provider_surface=(
+            str(capability["providerSurface"])
+            if capability.get("providerSurface")
+            else ("meta-accounts-center" if account_type == "profile" else "facebook-page-settings")
+        ),
+        export_capability_verified_at=(
+            str(capability["verifiedAt"]) if capability.get("verifiedAt") else None
+        ),
         enabled=bool(value.get("enabled", True)),
     )
 
@@ -393,3 +486,14 @@ def _now_iso() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _validate_observed_at(value: str) -> None:
+    from datetime import datetime
+
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("Facebook export capability observation time must be ISO 8601") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("Facebook export capability observation time must include a timezone")

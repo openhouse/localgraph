@@ -14,6 +14,7 @@ Maintain a private, local, account-scoped representation of Facebook Messages fo
 - self participant aliases;
 - a personal or organizational owner identity;
 - account-scoped incoming, Drive cache, completion registry, manifest, baseline, and sync-status paths.
+- an individual `exportCapability` observation; Pages default to `unverified` and are not sync-eligible.
 
 The primary personal profile maps to `person:self`. A Page maps to `organization:facebook:<account>`, even when the same person administers it. Correspondents retain shared `person:facebook:<name>` identities across profile and Page conversations when their normalized provider names match.
 
@@ -45,7 +46,7 @@ For each active Page:
 2. Use **See all profiles** and switch into the Page.
 3. Confirm access under **Settings → Page setup → Page access**.
 4. Open the Page download/export surface and inspect whether Messages and a recurring Drive destination are offered.
-5. If offered, apply the standard Messages-only all-time baseline plus daily three-year recurrence and verify the activity record.
+5. If offered, record `verify-facebook-export-capability --capability supported` for that exact Page, then apply the standard Messages-only all-time baseline plus daily three-year recurrence and verify the activity record.
 6. If only a one-time Page copy is offered, download that copy into the account's `incoming` path and leave recurrence support unverified; do not convert a manual export into a claim of automated provider coverage.
 
 Deactivated Pages remain visible in the private registry for historical custody. They may accept an already-held export, but their provider state must not be reported as active.
@@ -69,6 +70,20 @@ python -m localgraph --root "$HOME/Library/Application Support/Localgraph/worksp
 python -m localgraph --root "$HOME/Library/Application Support/Localgraph/workspace" facebook-accounts
 ```
 
+After inspecting one Page's own export surface, record its result individually:
+
+```bash
+python -m localgraph --root "$HOME/Library/Application Support/Localgraph/workspace" \
+  verify-facebook-export-capability \
+  --account PAGE_KEY --capability supported \
+  --provider-surface facebook-page-settings \
+  --observed-at 2026-08-29T22:00:00Z
+```
+
+Before that command, a Page remains visible but `syncEligible: false`. A matching
+packet is held without import and cannot be accepted as a baseline. Supported or
+unsupported evidence applies only to the named Page.
+
 Register real account names only in the ignored private workspace configuration, not in repository fixtures or documentation.
 
 ## Private paths and acquisition
@@ -87,7 +102,7 @@ views/facebook-accounts/<account>/threads/
 
 An authenticated profile pull lists only exact-prefix Facebook export packets and downloads only `your_facebook_activity/messages` or `messages`. Local `incoming` packets use the same importer. Inbox, archived-thread, and message-request folders are accepted. Raw bodies enter only ignored SQLite state and private rendered transcripts; scan and status responses remain body-free.
 
-Facebook accounts advance independently. A pending Page cannot erase a current personal-profile projection. Before replacing one account's projection, Localgraph requires at least one materialized packet for that account, then rebuilds that account from all of its available packets so provider repagination does not duplicate messages.
+Eligible Facebook accounts advance independently. An unverified or pending Page cannot erase a current personal-profile projection. Before replacing one account's projection, Localgraph requires both individual capability evidence and at least one materialized packet for that account, then rebuilds that account from all of its available packets so provider repagination does not duplicate messages.
 
 ## Privacy exclusion
 

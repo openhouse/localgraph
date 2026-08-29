@@ -14,7 +14,12 @@ from .automation import (
     run_daily_import,
 )
 from .drive import DriveAPIError, authenticate_google_drive, configure_google_drive_api, pull_google_drive_folder
-from .facebook_accounts import configure_facebook_account, exclude_facebook_account, facebook_accounts_status
+from .facebook_accounts import (
+    configure_facebook_account,
+    exclude_facebook_account,
+    facebook_accounts_status,
+    verify_facebook_export_capability,
+)
 from .facebook import scan_facebook_source
 from .facebook_sync import configure_facebook_baseline, install_facebook_sync, run_facebook_sync
 from .ingest import import_workspace_sources
@@ -24,6 +29,7 @@ from .imessage_sync import imessage_status, install_imessage_sync, run_imessage_
 from .paths import Workspace
 from .render import render_views
 from .schema import connect, initialize_schema
+from .status import build_localgraph_status, record_lifecycle_stage
 from .views import view_kinds, view_path
 
 
@@ -46,6 +52,10 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--force", action="store_true", help="Allow initialization in a non-empty directory.")
 
     commands.add_parser("doctor", help="Check workspace directories and database schema.")
+    commands.add_parser(
+        "status",
+        help="Report body-free health, scheduler, authorization, and lifecycle state for every source and account.",
+    )
 
     scan = commands.add_parser("scan", help="Detect Instagram transfer exports without reading message bodies.")
     scan.add_argument("--source", help="Instagram source directory. Defaults to sources/instagram.")
@@ -145,6 +155,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     exclude_facebook.add_argument("--account", required=True, help="Stable local account key.")
     exclude_facebook.add_argument("--reason", default="privacy-exclusion", help="Private exclusion reason code.")
+
+    verify_facebook = commands.add_parser(
+        "verify-facebook-export-capability",
+        help="Record an individual Facebook Page export capability observation before onboarding.",
+    )
+    verify_facebook.add_argument("--account", required=True)
+    verify_facebook.add_argument("--capability", choices=("supported", "unsupported"), required=True)
+    verify_facebook.add_argument("--provider-surface", required=True)
+    verify_facebook.add_argument("--observed-at", required=True, help="Timezone-qualified ISO 8601 observation time.")
+
+    lifecycle = commands.add_parser(
+        "record-lifecycle",
+        help="Record a provider-observed requested or preparing lifecycle event.",
+    )
+    lifecycle.add_argument("--source", choices=("instagram", "facebook"), required=True)
+    lifecycle.add_argument("--account", required=True)
+    lifecycle.add_argument("--stage", choices=("requested", "preparing"), required=True)
+    lifecycle.add_argument(
+        "--evidence",
+        choices=("provider-activity-record", "operator-observed-provider-ui"),
+        required=True,
+    )
+    lifecycle.add_argument("--observed-at", required=True, help="Timezone-qualified ISO 8601 observation time.")
 
     commands.add_parser(
         "facebook-accounts",
@@ -254,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
             summary = command_init(workspace, force=args.force)
         elif args.command == "doctor":
             summary = command_doctor(workspace)
+        elif args.command == "status":
+            summary = build_localgraph_status(workspace)
         elif args.command == "scan":
             summary = command_scan(workspace, source=args.source)
         elif args.command == "facebook-scan":
@@ -324,6 +359,23 @@ def main(argv: list[str] | None = None) -> int:
                 workspace,
                 account_key=args.account,
                 reason=args.reason,
+            )
+        elif args.command == "verify-facebook-export-capability":
+            summary = verify_facebook_export_capability(
+                workspace,
+                account_key=args.account,
+                capability=args.capability,
+                provider_surface=args.provider_surface,
+                observed_at=args.observed_at,
+            )
+        elif args.command == "record-lifecycle":
+            summary = record_lifecycle_stage(
+                workspace,
+                source=args.source,
+                account=args.account,
+                stage=args.stage,
+                observed_at=args.observed_at,
+                evidence=args.evidence,
             )
         elif args.command == "facebook-accounts":
             summary = facebook_accounts_status(workspace)

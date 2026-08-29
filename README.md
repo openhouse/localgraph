@@ -48,6 +48,7 @@ parts of the first scaffold family:
 python -m localgraph --root ~/Localgraph plan
 python -m localgraph --root ~/Localgraph init
 python -m localgraph --root ~/Localgraph doctor
+python -m localgraph --root ~/Localgraph status
 python -m localgraph --root ~/Localgraph scan
 python -m localgraph --root ~/Localgraph import --me "Jamie Burkart" --render
 python -m localgraph --root ~/Localgraph drive-pull
@@ -61,6 +62,10 @@ python -m localgraph --root ~/Localgraph view-name person "Alice Example" "insta
 ```
 
 `init` creates the private local workspace directories and a SQLite database.
+`status` is the unified body-free health and acceptance report for every source
+and account. It checks LaunchAgent load and exit state, freshness, Drive
+authorization, missing or empty custody, canonical import, rendering, and
+historical completeness without returning correspondence bodies or secrets.
 `scan` detects Instagram transfer exports under `sources/instagram` without
 returning message bodies. `import` reads Instagram JSON message exports and an
 iMessage `chat.db`, normalizes people, accounts, groups, threads, messages, and
@@ -112,8 +117,15 @@ for the complete custody, failure, and migration model.
 Facebook profiles and managed Pages use a sibling private registry. Personal
 profiles can reuse the same read-only Drive container authorization, while Page
 records remain provider-verification-required until the Page's own settings
-prove the available Messages export and recurrence controls. See
+prove the available Messages export and recurrence controls. Unverified Page
+packets are held without import; capability evidence is recorded for one Page
+at a time before it becomes sync-eligible. See
 [Facebook profile and managed Page messages](docs/facebook-messages.md).
+
+The common acceptance lifecycle is `configured → requested → preparing →
+delivered → imported → rendered → current / complete`. Current freshness and
+historical completeness remain separate. See [Source health and
+acceptance](docs/source-health-and-acceptance.md).
 
 Default private import locations:
 
@@ -336,7 +348,7 @@ generated orientation, navigation, provenance, and transcript-link material.
 
 ## Message Evals and Hill Climb
 
-The deterministic Instagram, Facebook, and Apple Messages suites cover the offline PKCE and read-only OAuth
+The deterministic source-health, Instagram, Facebook, and Apple Messages suites cover the offline PKCE and read-only OAuth
 contract, bounded cumulative-export selection, explicit baseline completeness,
 atomic completed-mirror publication, cumulative source replacement, stale
 generated-view reconciliation, last-known-good fallback, hourly scheduling,
