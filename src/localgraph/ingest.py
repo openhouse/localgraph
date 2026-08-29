@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from .instagram import detect_export_root, instagram_message_files
+from .instagram import detect_export_root, instagram_export_account_key, instagram_message_files
 from .paths import Workspace
 from .slug import slugify, stable_hash
 
@@ -182,7 +182,9 @@ def import_instagram_source(
             result.warnings.append(f"skipped non-object JSON: {file_path}")
             continue
 
-        source_thread_key = file_path.parent.relative_to(export_root).as_posix()
+        relative_thread_key = file_path.parent.relative_to(export_root).as_posix()
+        account_key = instagram_export_account_key(export_root.name)
+        source_thread_key = f"{account_key}:{relative_thread_key}" if account_key else relative_thread_key
         raw_participants = payload.get("participants") or []
         participants = _instagram_participants(raw_participants)
         title = _clean_text(payload.get("title")) or _title_from_participants(participants) or file_path.parent.name
@@ -195,7 +197,8 @@ def import_instagram_source(
             thread_kind,
             {
                 "export_root": str(export_root),
-                "thread_path": source_thread_key,
+                "thread_path": relative_thread_key,
+                "instagram_account_key": account_key,
                 "raw_title": payload.get("title"),
             },
         )

@@ -12,6 +12,75 @@ from localgraph.cli import main
 
 
 class IngestTests(unittest.TestCase):
+    def test_two_instagram_accounts_keep_identical_thread_paths_distinct(self) -> None:
+        """An Instagram thread path is unique only within its exporting account."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "graph"
+            source = root / "sources" / "instagram"
+            exports = {
+                "jamieburkart": "hello from Jamie's account",
+                "nycartc": "hello from NYCARTC's account",
+            }
+            for account_key, content in exports.items():
+                thread = (
+                    source
+                    / f"meta-{account_key}"
+                    / f"instagram-{account_key}-2026-08-29-export"
+                    / "your_instagram_activity"
+                    / "messages"
+                    / "inbox"
+                    / "shared_123"
+                )
+                thread.mkdir(parents=True)
+                (thread / "message_1.json").write_text(
+                    json.dumps(
+                        {
+                            "participants": [{"name": account_key}, {"name": "Shared Person"}],
+                            "title": "Shared Person",
+                            "messages": [
+                                {
+                                    "sender_name": "Shared Person",
+                                    "timestamp_ms": 1700000000000,
+                                    "content": content,
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            code, stdout = run_cli(
+                [
+                    "--root",
+                    str(root),
+                    "import",
+                    "--skip-imessage",
+                    "--me",
+                    "Jamie",
+                    "--me-instagram",
+                    "jamieburkart",
+                ]
+            )
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["totals"]["threads"], 2)
+            self.assertEqual(payload["totals"]["messages"], 2)
+            with contextlib.closing(sqlite3.connect(root / "state" / "localgraph.sqlite")) as db:
+                thread_keys = [
+                    row[0]
+                    for row in db.execute(
+                        "SELECT source_thread_key FROM threads WHERE source_kind = 'instagram' ORDER BY source_thread_key"
+                    )
+                ]
+            self.assertEqual(
+                thread_keys,
+                [
+                    "jamieburkart:your_instagram_activity/messages/inbox/shared_123",
+                    "nycartc:your_instagram_activity/messages/inbox/shared_123",
+                ],
+            )
+
     def test_import_instagram_messages_people_group_and_media(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "graph"

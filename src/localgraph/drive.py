@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .instagram import scan_instagram_source
+from .instagram_accounts import instagram_account
 from .paths import Workspace
 
 
@@ -182,7 +183,24 @@ def authenticate_google_drive(
     }
 
 
-def pull_configured_google_drive_source(workspace: Workspace) -> DrivePullResult | None:
+def pull_configured_google_drive_source(
+    workspace: Workspace,
+    *,
+    account_key: str | None = None,
+) -> DrivePullResult | None:
+    if account_key is not None:
+        account = instagram_account(workspace, account_key)
+        if not account.google_drive_folder_id:
+            return None
+        return pull_latest_instagram_export(
+            workspace,
+            container_folder_id=account.google_drive_folder_id,
+            cache_dir=account.google_drive_cache_path,
+            token_path=account.google_drive_token_path,
+            export_name_prefix=account.export_name_prefix,
+            registry_path=account.completed_exports_registry_path,
+            manifest_path=account.pull_manifest_path,
+        )
     config = _load_config(workspace)
     instagram = config.get("imports", {}).get("instagram", {}) if isinstance(config.get("imports"), dict) else {}
     folder_id = instagram.get("googleDriveFolderId") if isinstance(instagram, dict) else None
@@ -210,6 +228,9 @@ def pull_latest_instagram_export(
     cache_dir: Path | None = None,
     token_path: Path | None = None,
     api_base_url: str | None = None,
+    export_name_prefix: str | None = None,
+    registry_path: Path | None = None,
+    manifest_path: Path | None = None,
 ) -> DrivePullResult:
     workspace.ensure_workspace(force=False)
     cache_root = cache_dir or configured_drive_cache_dir(workspace)
@@ -217,10 +238,16 @@ def pull_latest_instagram_export(
     token = _load_token(token_source)
     access_token = _valid_access_token(token_source, token)
     base_url = api_base_url or os.environ.get("LOCALGRAPH_DRIVE_API_BASE_URL", DRIVE_API_BASE_URL)
-    candidates = _list_instagram_exports(base_url, access_token, container_folder_id)
+    candidates = _list_instagram_exports(
+        base_url,
+        access_token,
+        container_folder_id,
+        export_name_prefix=export_name_prefix,
+    )
     selected = candidates[-1]
-    registry_path = workspace.state_dir / COMPLETED_EXPORTS_REGISTRY_NAME
-    registry = _load_json(registry_path, default={"exports": {}})
+    registry_target = registry_path or workspace.state_dir / COMPLETED_EXPORTS_REGISTRY_NAME
+    manifest_target = manifest_path or workspace.state_dir / "google-drive-pull-manifest.json"
+    registry = _load_json(registry_target, default={"exports": {}})
     if not isinstance(registry, dict):
         registry = {"exports": {}}
     entries = registry.get("exports")
@@ -231,7 +258,7 @@ def pull_latest_instagram_export(
     result = DrivePullResult(
         folder_id=selected.folder_id,
         cache_path=cache_root / selected.relative_path,
-        manifest_path=workspace.state_dir / "google-drive-pull-manifest.json",
+        manifest_path=manifest_target,
     )
     for candidate in candidates:
         selected_cache = cache_root / candidate.relative_path
@@ -248,6 +275,7 @@ def pull_latest_instagram_export(
             cache_dir=selected_cache,
             token_path=token_source,
             api_base_url=base_url,
+            manifest_path=manifest_target,
             allowed_relative_roots=(
                 Path("your_instagram_activity/messages"),
                 Path("messages"),
@@ -269,7 +297,7 @@ def pull_latest_instagram_export(
                 "checkedAt": _now_iso(),
             }
             registry.update({"containerFolderId": container_folder_id, "updatedAt": _now_iso()})
-            _write_json_private(registry_path, registry)
+            _write_json_private(registry_target, registry)
             result.warnings.append(f"skipped Instagram export without message files: {candidate.name}")
             continue
         entries[candidate.folder_id] = {
@@ -280,7 +308,7 @@ def pull_latest_instagram_export(
             "completedAt": _now_iso(),
         }
         registry.update({"containerFolderId": container_folder_id, "updatedAt": _now_iso()})
-        _write_json_private(registry_path, registry)
+        _write_json_private(registry_target, registry)
         result.completed_export_paths.append(selected_cache.resolve())
 
     result.configured_folder_id = container_folder_id
@@ -295,14 +323,22 @@ def _select_latest_instagram_export(
     base_url: str,
     access_token: str,
     container_folder_id: str,
+    export_name_prefix: str | None = None,
 ) -> InstagramExportFolder:
-    return _list_instagram_exports(base_url, access_token, container_folder_id)[-1]
+    return _list_instagram_exports(
+        base_url,
+        access_token,
+        container_folder_id,
+        export_name_prefix=export_name_prefix,
+    )[-1]
 
 
 def _list_instagram_exports(
     base_url: str,
     access_token: str,
     container_folder_id: str,
+    *,
+    export_name_prefix: str | None = None,
 ) -> list[InstagramExportFolder]:
     children = _list_drive_children(base_url, access_token, container_folder_id)
     candidates: list[InstagramExportFolder] = []
@@ -312,7 +348,7 @@ def _list_instagram_exports(
             continue
         name = str(item.get("name") or "")
         folder_id = str(item.get("id") or "")
-        if name.startswith("instagram-") and folder_id:
+        if _matches_instagram_export_name(name, export_name_prefix) and folder_id:
             candidates.append(InstagramExportFolder(folder_id, name, Path(_safe_drive_name(name))))
             continue
         if not name.startswith("meta-") or not folder_id:
@@ -328,7 +364,7 @@ def _list_instagram_exports(
             export_id = str(export.get("id") or "")
             if (
                 str(export.get("mimeType") or "") == DRIVE_FOLDER_MIME_TYPE
-                and export_name.startswith("instagram-")
+                and _matches_instagram_export_name(export_name, export_name_prefix)
                 and export_id
             ):
                 candidates.append(
@@ -340,7 +376,7 @@ def _list_instagram_exports(
                 )
     if not candidates:
         raise DriveAPIError(
-            "configured Google Drive container has no direct instagram-* exports or meta-*/instagram-* exports"
+            "configured Google Drive container has no matching direct instagram-* exports or meta-*/instagram-* exports"
         )
     return sorted(
         candidates,
@@ -348,9 +384,23 @@ def _list_instagram_exports(
     )
 
 
-def completed_instagram_export_paths(workspace: Workspace) -> list[Path]:
-    cache_root = configured_drive_cache_dir(workspace).resolve()
-    registry = _load_json(workspace.state_dir / COMPLETED_EXPORTS_REGISTRY_NAME, default={"exports": {}})
+def _matches_instagram_export_name(name: str, export_name_prefix: str | None) -> bool:
+    if export_name_prefix is None:
+        return name.startswith("instagram-")
+    if not name.startswith(export_name_prefix):
+        return False
+    return re.match(r"^20\d{2}-\d{2}-\d{2}(?:-|$)", name[len(export_name_prefix) :]) is not None
+
+
+def completed_instagram_export_paths(workspace: Workspace, *, account_key: str | None = None) -> list[Path]:
+    if account_key is not None:
+        account = instagram_account(workspace, account_key)
+        cache_root = account.google_drive_cache_path.resolve()
+        registry_path = account.completed_exports_registry_path
+    else:
+        cache_root = configured_drive_cache_dir(workspace).resolve()
+        registry_path = workspace.state_dir / COMPLETED_EXPORTS_REGISTRY_NAME
+    registry = _load_json(registry_path, default={"exports": {}})
     entries = registry.get("exports") if isinstance(registry, dict) else None
     if not isinstance(entries, dict):
         return []
@@ -403,19 +453,20 @@ def pull_google_drive_folder(
     token_path: Path | None = None,
     api_base_url: str | None = None,
     allowed_relative_roots: tuple[Path, ...] | None = None,
+    manifest_path: Path | None = None,
 ) -> DrivePullResult:
     workspace.ensure_workspace(force=False)
     cache_root = cache_dir or configured_drive_cache_dir(workspace)
     token_source = token_path or configured_drive_token_path(workspace)
     cache_root.mkdir(parents=True, exist_ok=True)
-    manifest_path = workspace.state_dir / "google-drive-pull-manifest.json"
-    manifest = _load_json(manifest_path, default={"files": {}})
+    manifest_target = manifest_path or workspace.state_dir / "google-drive-pull-manifest.json"
+    manifest = _load_json(manifest_target, default={"files": {}})
     if "files" not in manifest or not isinstance(manifest["files"], dict):
         manifest["files"] = {}
 
     token = _load_token(token_source)
     base_url = api_base_url or os.environ.get("LOCALGRAPH_DRIVE_API_BASE_URL", DRIVE_API_BASE_URL)
-    result = DrivePullResult(folder_id=folder_id, cache_path=cache_root, manifest_path=manifest_path)
+    result = DrivePullResult(folder_id=folder_id, cache_path=cache_root, manifest_path=manifest_target)
     used_paths: dict[Path, str] = {}
 
     def current_access_token() -> str:
@@ -489,7 +540,7 @@ def pull_google_drive_folder(
                 }
         frontier = next_frontier
     manifest.update({"folderId": folder_id, "cachePath": str(cache_root), "updatedAt": _now_iso()})
-    _write_json_private(manifest_path, manifest)
+    _write_json_private(manifest_target, manifest)
     return result
 
 

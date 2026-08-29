@@ -13,6 +13,69 @@ from localgraph.slug import stable_view_name
 
 
 class CliTests(unittest.TestCase):
+    def test_configure_two_instagram_accounts_adopts_primary_and_scopes_private_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "graph"
+            code, _ = run_cli(["--root", str(root), "init"])
+            self.assertEqual(code, 0)
+            code, _ = run_cli(["--root", str(root), "configure-drive-api", "--folder-id", "drive-root"])
+            self.assertEqual(code, 0)
+
+            code, _ = run_cli(
+                [
+                    "--root",
+                    str(root),
+                    "configure-instagram-account",
+                    "--account",
+                    "jamieburkart",
+                    "--profile-name",
+                    "jamieburkart",
+                    "--owner-display-name",
+                    "Jamie Burkart",
+                    "--owner-kind",
+                    "person",
+                    "--self-name",
+                    "Jamie",
+                    "--adopt-legacy",
+                    "--primary",
+                ]
+            )
+            self.assertEqual(code, 0)
+            code, _ = run_cli(
+                [
+                    "--root",
+                    str(root),
+                    "configure-instagram-account",
+                    "--account",
+                    "nycartc",
+                    "--profile-name",
+                    "nycartc",
+                    "--owner-display-name",
+                    "NYC Artists' Coalition",
+                    "--owner-kind",
+                    "organization",
+                    "--self-name",
+                    "nycartc",
+                    "--reuse-primary-drive",
+                ]
+            )
+            self.assertEqual(code, 0)
+
+            config = json.loads((root / "localgraph.config.json").read_text(encoding="utf-8"))
+            instagram = config["imports"]["instagram"]
+            self.assertEqual(instagram["primaryAccountKey"], "jamieburkart")
+            self.assertEqual(set(instagram["accounts"]), {"jamieburkart", "nycartc"})
+            jamie = instagram["accounts"]["jamieburkart"]
+            nycartc = instagram["accounts"]["nycartc"]
+            self.assertEqual(jamie["googleDriveCachePath"], "sources/instagram-drive-cache")
+            self.assertEqual(jamie["completedExportsRegistryPath"], "state/instagram-drive-completed-exports.json")
+            self.assertEqual(nycartc["googleDriveFolderId"], "drive-root")
+            self.assertEqual(nycartc["googleDriveTokenPath"], "state/google-drive-token.json")
+            self.assertEqual(nycartc["googleDriveCachePath"], "sources/instagram-accounts/nycartc/drive-cache")
+            self.assertEqual(nycartc["syncStatusPath"], "state/instagram-accounts/nycartc/sync-status.json")
+            self.assertEqual(nycartc["exportNamePrefix"], "instagram-nycartc-")
+            self.assertEqual(nycartc["ownerKind"], "organization")
+
     def test_init_accepts_repository_eval_and_script_entries(self) -> None:
         """Catch repository-owned eval tooling making the project root fail workspace validation."""
         with tempfile.TemporaryDirectory() as tmp:

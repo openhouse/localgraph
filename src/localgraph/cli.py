@@ -16,6 +16,7 @@ from .automation import (
 from .drive import DriveAPIError, authenticate_google_drive, configure_google_drive_api, pull_google_drive_folder
 from .ingest import import_workspace_sources
 from .instagram import scan_instagram_source
+from .instagram_accounts import configure_instagram_account
 from .paths import Workspace
 from .render import render_views
 from .schema import connect, initialize_schema
@@ -88,6 +89,20 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Exact completed instagram-* folder name created by the verified all-history export.",
     )
+
+    configure_account = commands.add_parser(
+        "configure-instagram-account",
+        help="Add or update one account in the multi-account Instagram registry.",
+    )
+    configure_account.add_argument("--account", required=True, help="Stable local account key, usually the username.")
+    configure_account.add_argument("--profile-name", required=True, help="Instagram profile username without @.")
+    configure_account.add_argument("--owner-display-name", required=True, help="Display name for the exporting identity.")
+    configure_account.add_argument("--owner-kind", choices=("person", "organization"), required=True)
+    configure_account.add_argument("--self-name", action="append", default=[], help="Participant name belonging to this account. May be repeated.")
+    configure_account.add_argument("--export-name-prefix", help="Exact Meta export folder prefix. Defaults to instagram-<profile>-." )
+    configure_account.add_argument("--adopt-legacy", action="store_true", help="Reuse the existing singleton cache, registry, mirror, and status paths.")
+    configure_account.add_argument("--reuse-primary-drive", action="store_true", help="Reuse the primary account's Drive folder and read-only OAuth token.")
+    configure_account.add_argument("--primary", action="store_true", help="Make this the primary Instagram account.")
 
     drive_pull = commands.add_parser("drive-pull", help="Pull a private Google Drive folder into the local Instagram cache.")
     drive_pull.add_argument("--folder-id", help="Google Drive folder ID. Defaults to configured imports.instagram.googleDriveFolderId.")
@@ -185,6 +200,19 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "configure-instagram-baseline":
             summary = configure_instagram_baseline(workspace, args.export_name)
+        elif args.command == "configure-instagram-account":
+            summary = configure_instagram_account(
+                workspace,
+                account_key=args.account,
+                profile_name=args.profile_name,
+                owner_display_name=args.owner_display_name,
+                owner_kind=args.owner_kind,
+                self_names=args.self_name,
+                export_name_prefix=args.export_name_prefix,
+                adopt_legacy=args.adopt_legacy,
+                reuse_primary_drive=args.reuse_primary_drive,
+                primary=args.primary,
+            )
         elif args.command == "drive-pull":
             summary = command_drive_pull(
                 workspace,

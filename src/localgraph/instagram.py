@@ -6,6 +6,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+INSTAGRAM_EXPORT_ACCOUNT_PATTERN = re.compile(
+    r"^instagram-(?P<account>.+?)-\d{4}-\d{2}-\d{2}(?:-|$)",
+    re.IGNORECASE,
+)
+
+
 @dataclass
 class InstagramExportScan:
     name: str
@@ -97,6 +103,15 @@ def detect_export_root(source_path: Path, file_path: Path) -> Path:
         if index > 0:
             return source_path.joinpath(*parts[:index])
     return source_path
+
+
+def instagram_export_account_key(export_name: str) -> str | None:
+    """Return the exporting profile encoded in a dated Meta packet name."""
+    match = INSTAGRAM_EXPORT_ACCOUNT_PATTERN.match(export_name.strip())
+    if match is None:
+        return None
+    account = match.group("account").strip().lstrip("@").lower()
+    return account or None
 
 
 def _iso_mtime(path: Path) -> str:

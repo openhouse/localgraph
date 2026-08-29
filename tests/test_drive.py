@@ -22,9 +22,11 @@ from localgraph.drive import (
     _is_unchanged,
     _list_instagram_exports,
     configure_google_drive_api,
+    pull_configured_google_drive_source,
     pull_google_drive_folder,
 )
 from localgraph.instagram import scan_instagram_source
+from localgraph.instagram_accounts import configure_instagram_account
 from localgraph.paths import Workspace
 
 
@@ -54,6 +56,62 @@ def message_payload() -> bytes:
 
 
 class DrivePullTests(unittest.TestCase):
+    def test_configured_account_pull_uses_scoped_paths_and_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Workspace(Path(tmp) / "graph")
+            configure_google_drive_api(workspace, folder_id="drive-root")
+            configure_instagram_account(
+                workspace,
+                account_key="jamieburkart",
+                profile_name="jamieburkart",
+                owner_display_name="Jamie Burkart",
+                owner_kind="person",
+                self_names=["Jamie"],
+                adopt_legacy=True,
+                primary=True,
+            )
+            configure_instagram_account(
+                workspace,
+                account_key="nycartc",
+                profile_name="nycartc",
+                owner_display_name="NYC Artists' Coalition",
+                owner_kind="organization",
+                self_names=["nycartc"],
+                reuse_primary_drive=True,
+            )
+
+            sentinel = object()
+            with mock.patch("localgraph.drive.pull_latest_instagram_export", return_value=sentinel) as pull:
+                result = pull_configured_google_drive_source(workspace, account_key="nycartc")
+
+            self.assertIs(result, sentinel)
+            kwargs = pull.call_args.kwargs
+            self.assertEqual(kwargs["container_folder_id"], "drive-root")
+            self.assertEqual(kwargs["export_name_prefix"], "instagram-nycartc-")
+            self.assertEqual(kwargs["cache_dir"], workspace.root / "sources/instagram-accounts/nycartc/drive-cache")
+            self.assertEqual(kwargs["registry_path"], workspace.root / "state/instagram-accounts/nycartc/completed-exports.json")
+            self.assertEqual(kwargs["manifest_path"], workspace.root / "state/instagram-accounts/nycartc/pull-manifest.json")
+
+    def test_drive_export_discovery_filters_packets_by_exact_account_prefix(self) -> None:
+        def list_children(_base_url: str, _token: str, parent_id: str) -> list[dict[str, object]]:
+            if parent_id == "root":
+                return [folder("meta", "meta-2026-Aug-29")]
+            return [
+                folder("jamie-export", "instagram-jamieburkart-2026-08-29-a"),
+                folder("nycartc-export", "instagram-nycartc-2026-08-29-b"),
+                folder("lookalike-export", "instagram-nycartc-archive-2026-08-29-c"),
+            ]
+
+        with mock.patch("localgraph.drive._list_drive_children", side_effect=list_children):
+            exports = _list_instagram_exports(
+                FAKE_DRIVE_BASE_URL,
+                "token",
+                "root",
+                export_name_prefix="instagram-nycartc-",
+            )
+
+        self.assertEqual([item.folder_id for item in exports], ["nycartc-export"])
+
     def test_configured_sync_records_and_skips_exports_without_messages(self) -> None:
         """Catch a legitimate non-message Instagram packet degrading the cumulative mirror."""
         with tempfile.TemporaryDirectory() as tmp, fake_drive_api(
