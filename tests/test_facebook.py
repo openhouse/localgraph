@@ -534,6 +534,11 @@ class FacebookTests(unittest.TestCase):
 
             self.assertEqual(code, 0)
             self.assertEqual(json.loads(stdout)["historyCoverage"], "complete-through-latest-export")
+            receipt = json.loads(
+                (root / "state/facebook-accounts/example-person/sync-status.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(receipt["historyCoverage"], "complete-through-latest-export")
+            self.assertEqual(receipt["baselineExportName"], export_name)
             code, stdout = run_cli(["--root", str(root), "facebook-sync", "--no-render"])
             self.assertEqual(code, 0)
             self.assertEqual(

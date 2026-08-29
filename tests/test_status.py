@@ -20,6 +20,74 @@ NOW = datetime(2026, 8, 29, 22, 0, tzinfo=timezone.utc)
 
 
 class SourceHealthTests(unittest.TestCase):
+    def test_recorded_instagram_baseline_immediately_advances_status_acceptance(self) -> None:
+        """Baseline acceptance cannot leave status stale until another network sync."""
+        from localgraph.automation import configure_instagram_baseline
+        from localgraph.status import build_localgraph_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            workspace = Workspace(base / "graph")
+            home = base / "home"
+            configure_instagram_account(
+                workspace,
+                account_key="nycartc",
+                profile_name="nycartc",
+                owner_display_name="NYC Artists Coalition",
+                owner_kind="organization",
+                self_names=["nycartc"],
+                adopt_legacy=True,
+                primary=True,
+            )
+            export_name = "instagram-nycartc-2026-08-29-baseline"
+            export = workspace.sources_dir / "instagram-drive-cache/meta-html" / export_name
+            message = export / "your_instagram_activity/messages/inbox/artist_123/message_1.html"
+            message.parent.mkdir(parents=True)
+            message.write_text(
+                '<h1>Example Artist</h1><div class="_a6-g"><h2 class="_a6-h">Example Artist</h2>'
+                '<div class="_a6-p">Hello</div><div class="_a6-o">Aug 29, 2026 3:45 PM</div></div>',
+                encoding="utf-8",
+            )
+            registry = workspace.state_dir / "instagram-drive-completed-exports.json"
+            registry.write_text(
+                json.dumps(
+                    {
+                        "exports": {
+                            "baseline-id": {
+                                "status": "completed",
+                                "relativePath": f"meta-html/{export_name}",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (workspace.state_dir / "instagram-sync-status.json").write_text(
+                json.dumps(
+                    {
+                        "status": "current",
+                        "lastSuccessfulSyncAt": "2026-08-29T21:30:00Z",
+                        "completedExports": 1,
+                        "messageFiles": 1,
+                        "historyCoverage": "baseline-required",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            configure_instagram_baseline(workspace, export_name, account_key="nycartc")
+            report = build_localgraph_status(
+                workspace,
+                now=NOW,
+                home=home,
+                launchctl=lambda _label: (113, "service not found"),
+            )
+
+            account = report["sources"]["instagram"]["accounts"][0]
+            self.assertEqual(account["historyCoverage"], "complete-through-latest-export")
+            self.assertTrue(account["lifecycle"]["complete"])
+            self.assertEqual(account["lifecycle"]["stages"]["complete"]["baselineExportName"], export_name)
+
     def test_status_detects_failed_scheduler_expired_auth_stale_sync_missing_export_and_empty_snapshot(self) -> None:
         """Catch a nominally configured source concealing several independent acceptance failures."""
         from localgraph.status import build_localgraph_status

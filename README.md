@@ -67,7 +67,7 @@ and account. It checks LaunchAgent load and exit state, freshness, Drive
 authorization, missing or empty custody, canonical import, rendering, and
 historical completeness without returning correspondence bodies or secrets.
 `scan` detects Instagram transfer exports under `sources/instagram` without
-returning message bodies. `import` reads Instagram JSON message exports and an
+returning message bodies. `import` reads Instagram JSON and HTML message exports and an
 iMessage `chat.db`, normalizes people, accounts, groups, threads, messages, and
 media references into SQLite, and can immediately `--render` filesystem views.
 `drive-pull` uses a private authenticated Google Drive API token to mirror a
@@ -215,9 +215,11 @@ private OAuth credential before subsequent provider requests. Drive metadata
 for sibling export and message folders is listed with bounded concurrency so
 large, mostly empty Meta directory skeletons do not serialize thousands of
 network round trips; file writes and canonical imports remain single-writer.
-Instagram packets that contain no message files are recorded as such and
-skipped on later runs; they do not invalidate or repeatedly delay the completed
-message packet chain.
+Instagram packets that contain no supported JSON or HTML message files are
+recorded as such and skipped on later runs; they do not invalidate or repeatedly
+delay the completed message packet chain. When support for a provider format is
+added, previously skipped cached packets are re-evaluated and can advance from
+delivered to imported without a false completeness claim.
 
 Freshness and historical completeness are separate. Until a one-time
 all-available-information export has completed, sync status reports
@@ -356,7 +358,8 @@ authenticated acquisition precedence, overlapping-export deduplication,
 single-writer synchronization, account-scoped packet selection and state,
 atomic multi-account rebuilds, person/organization owner separation,
 account-specific baseline claims, canonical import and rendering, and repository
-workspace compatibility. The Facebook suite additionally verifies profile/Page
+workspace compatibility. Instagram acceptance also covers Meta HTML message
+pages and re-evaluation of packets that predate support for that format. The Facebook suite additionally verifies profile/Page
 identity separation, body-free registry status, independent pending-account
 semantics, Messages-only Drive scope, privacy exclusions, and hourly
 private-registry scheduling. The Apple Messages suite verifies WAL-consistent

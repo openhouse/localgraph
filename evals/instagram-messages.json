@@ -48,6 +48,10 @@
       "criterion": "A legitimate Instagram export packet with no message files is recorded and skipped without degrading completed message history or being retraversed forever."
     },
     {
+      "id": "test_drive.DrivePullTests.test_previous_no_message_registry_entry_is_rechecked_for_supported_html",
+      "criterion": "A delivered HTML packet previously classified as having no supported message files is reconsidered when that provider format becomes importable."
+    },
+    {
       "id": "test_drive.DrivePullTests.test_drive_pull_lists_sibling_folders_concurrently",
       "criterion": "Wide provider message skeletons are enumerated with bounded sibling concurrency instead of one network round trip at a time."
     },
@@ -122,6 +126,10 @@
     {
       "id": "test_ingest.IngestTests.test_import_instagram_messages_people_group_and_media",
       "criterion": "Instagram messages, participants, groups, media references, transcripts, and person capsules render from canonical state."
+    },
+    {
+      "id": "test_ingest.IngestTests.test_import_instagram_html_messages_from_meta_export",
+      "criterion": "Meta's downloadable HTML message pages become canonical account-scoped threads and messages instead of being mistaken for empty packets."
     },
     {
       "id": "test_cli.CliTests.test_init_accepts_repository_eval_and_script_entries",

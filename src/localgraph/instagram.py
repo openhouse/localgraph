@@ -20,6 +20,7 @@ class InstagramExportScan:
     message_files: int = 0
     thread_folders: set[str] = field(default_factory=set)
     latest_modified_time: str | None = None
+    message_formats: dict[str, int] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -29,6 +30,7 @@ class InstagramExportScan:
             "messageFiles": self.message_files,
             "threadFolders": sorted(self.thread_folders),
             "latestModifiedTime": self.latest_modified_time,
+            "messageFormats": dict(sorted(self.message_formats.items())),
         }
 
 
@@ -53,20 +55,27 @@ def scan_instagram_source(source_path: Path) -> dict[str, object]:
             )
             exports[export_root] = item
         item.message_files += 1
+        file_format = file_path.suffix.lower().lstrip(".")
+        item.message_formats[file_format] = item.message_formats.get(file_format, 0) + 1
         item.thread_folders.add(thread_folder)
         modified = _iso_mtime(file_path)
         item.latest_modified_time = max(filter(None, [item.latest_modified_time, modified]))
 
+    format_counts: dict[str, int] = {}
+    for item in exports.values():
+        for file_format, count in item.message_formats.items():
+            format_counts[file_format] = format_counts.get(file_format, 0) + count
     return {
         "sourceKind": "instagram",
         "sourcePath": str(source),
         "exports": [item.to_json() for _, item in sorted(exports.items(), key=lambda pair: pair[1].relative_path)],
         "totalMessageFiles": len(message_files),
+        "messageFormats": dict(sorted(format_counts.items())),
     }
 
 
 def instagram_message_files(source_path: Path) -> list[Path]:
-    """List Instagram message JSON while following only acyclic directory symlinks."""
+    """List supported Instagram message JSON or HTML without symlink cycles."""
     source = source_path.expanduser().resolve()
     if not source.exists():
         return []
@@ -85,7 +94,7 @@ def instagram_message_files(source_path: Path) -> list[Path]:
             if (root_path / name).resolve() not in seen_directories
         ]
         for name in file_names:
-            if name == "message.json" or re.fullmatch(r"message_\d+\.json", name):
+            if name in {"message.json", "message.html"} or re.fullmatch(r"message_\d+\.(?:json|html)", name):
                 candidate = root_path / name
                 if candidate.is_file():
                     message_files.append(candidate)

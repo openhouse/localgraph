@@ -12,6 +12,10 @@
       "criterion": "Requested and preparing provider evidence joins delivered, imported, rendered, and current local evidence while subsequent packets remain historically incomplete without an account-specific baseline."
     },
     {
+      "id": "test_status.SourceHealthTests.test_recorded_instagram_baseline_immediately_advances_status_acceptance",
+      "criterion": "Recording an exact locally completed baseline immediately advances the unified account status instead of leaving a stale baseline-required receipt until a later network sync."
+    },
+    {
       "id": "test_status.SourceHealthTests.test_status_cli_lists_every_source_and_account_without_correspondence_bodies",
       "criterion": "The unified status command includes Instagram, Facebook, and Apple Messages accounts while redacting correspondence bodies and raw failure text."
     },

@@ -28,7 +28,7 @@ from .ingest import (
     import_instagram_source,
 )
 from .instagram import detect_export_root, scan_instagram_source
-from .instagram_accounts import InstagramAccount, instagram_accounts
+from .instagram_accounts import InstagramAccount, instagram_account, instagram_accounts
 from .paths import Workspace
 from .render import render_views
 from .schema import connect, initialize_schema
@@ -121,9 +121,16 @@ def configure_instagram_baseline(
         target = accounts.get(account_key) if isinstance(accounts, dict) else None
         if not isinstance(target, dict):
             raise ValueError(f"Instagram account is not configured: {account_key}")
+    recorded_at = _now_iso()
     target["baselineExportName"] = export_name
-    target["baselineRecordedAt"] = _now_iso()
+    target["baselineRecordedAt"] = recorded_at
     write_config(workspace, config)
+    _advance_instagram_baseline_receipts(
+        workspace,
+        account_key=account_key,
+        export_name=export_name,
+        recorded_at=recorded_at,
+    )
     result: dict[str, object] = {
         "baselineExportName": export_name,
         "baselineExportPath": str(matches[0]),
@@ -133,6 +140,39 @@ def configure_instagram_baseline(
     if account_key is not None:
         result["accountKey"] = account_key
     return result
+
+
+def _advance_instagram_baseline_receipts(
+    workspace: Workspace,
+    *,
+    account_key: str | None,
+    export_name: str,
+    recorded_at: str,
+) -> None:
+    if account_key is None:
+        status_path = workspace.state_dir / "instagram-sync-status.json"
+    else:
+        status_path = instagram_account(workspace, account_key).sync_status_path
+    status = _load_json_path(status_path)
+    if status:
+        status.update(
+            {
+                "baselineExportName": export_name,
+                "baselineRecordedAt": recorded_at,
+                "historyCoverage": "complete-through-latest-export",
+            }
+        )
+        _write_json_private_path(status_path, status)
+
+    if account_key is None:
+        return
+    aggregate_path = workspace.state_dir / "instagram-accounts-sync-status.json"
+    aggregate = _load_json_path(aggregate_path)
+    accounts = aggregate.get("accounts") if isinstance(aggregate, dict) else None
+    account_status = accounts.get(account_key) if isinstance(accounts, dict) else None
+    if isinstance(account_status, dict):
+        account_status["historyCoverage"] = "complete-through-latest-export"
+        _write_json_private_path(aggregate_path, aggregate)
 
 
 def run_daily_import(

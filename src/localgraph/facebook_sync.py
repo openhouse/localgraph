@@ -42,11 +42,23 @@ def configure_facebook_baseline(
         raise ValueError(f"Facebook baseline export name is ambiguous for {account.account_key}: {export_name}")
     config = json.loads(workspace.config_path.read_text(encoding="utf-8"))
     record = config["imports"]["facebook"]["accounts"][account.account_key]
+    recorded_at = _now_iso()
     record["baselineExportName"] = export_name
-    record["baselineRecordedAt"] = _now_iso()
+    record["baselineRecordedAt"] = recorded_at
     temporary = workspace.config_path.with_name(f".{workspace.config_path.name}.{os.getpid()}.tmp")
     temporary.write_text(f"{json.dumps(config, indent=2, sort_keys=True)}\n", encoding="utf-8")
+    temporary.chmod(0o600)
     os.replace(temporary, workspace.config_path)
+    status = _load_json(account.sync_status_path)
+    if status:
+        status.update(
+            {
+                "baselineExportName": export_name,
+                "baselineRecordedAt": recorded_at,
+                "historyCoverage": "complete-through-latest-export",
+            }
+        )
+        _write_json_private(account.sync_status_path, status)
     return {
         "accountKey": account.account_key,
         "baselineExportName": export_name,

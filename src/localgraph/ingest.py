@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 from .facebook import detect_facebook_export_root, facebook_export_account_key, facebook_message_files
 from .instagram import detect_export_root, instagram_export_account_key, instagram_message_files
+from .instagram_html import read_instagram_html
 from .paths import Workspace
 from .slug import slugify, stable_hash
 
@@ -232,7 +233,7 @@ def import_instagram_source(
             )
             seen_imports.add(source_identifier)
 
-        payload = _read_instagram_json(file_path)
+        payload = _read_instagram_message(file_path)
         if not isinstance(payload, dict):
             result.warnings.append(f"skipped non-object JSON: {file_path}")
             continue
@@ -819,6 +820,12 @@ def _read_instagram_json(file_path: Path) -> Any:
         return json.loads(raw.decode("utf-8"))
     except UnicodeDecodeError:
         return json.loads(raw.decode("latin-1"))
+
+
+def _read_instagram_message(file_path: Path) -> Any:
+    if file_path.suffix.lower() == ".html":
+        return read_instagram_html(file_path)
+    return _read_instagram_json(file_path)
 
 
 def _instagram_participants(raw_participants: object) -> list[str]:

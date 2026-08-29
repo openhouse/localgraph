@@ -41,7 +41,7 @@
     },
     {
       "id": "test_facebook.FacebookTests.test_facebook_history_requires_account_specific_completed_baseline",
-      "criterion": "Fresh incremental Facebook packets cannot be labeled full history until that exact account has a materialized, explicitly recorded all-time baseline."
+      "criterion": "Fresh incremental Facebook packets cannot be labeled full history until that exact account has a materialized, explicitly recorded all-time baseline; acceptance updates its private receipt immediately."
     },
     {
       "id": "test_facebook.FacebookTests.test_shared_drive_discovery_error_is_source_neutral",

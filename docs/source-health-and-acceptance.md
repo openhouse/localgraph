@@ -54,7 +54,7 @@ The stages deliberately use different evidence:
 | `current` | Delivery, import, and rendering are present and the successful receipt is fresh and nonempty. |
 | `complete` | An account-specific all-time baseline is recorded, or Apple Messages has a validated complete-through-snapshot receipt. |
 
-`current` and `complete` are separate assertions. A subsequent incremental Instagram or Facebook packet can be delivered, imported, rendered, and current while history remains `baseline-required`. Packet counts advance without turning that state into a completeness claim.
+`current` and `complete` are separate assertions. A subsequent incremental Instagram or Facebook packet can be delivered, imported, rendered, and current while history remains `baseline-required`. Packet counts advance without turning that state into a completeness claim. A packet present in local custody is delivered; it does not become imported merely because it was downloaded.
 
 Only the provider-observed `requested` and `preparing` stages are entered manually:
 
@@ -69,7 +69,9 @@ Localgraph derives delivery and every later stage from local custody. The privat
 
 ## Instagram acceptance
 
-An Instagram account is accepted as current only after an exact-prefix packet is locally complete, represented in canonical state, and rendered. A one-time all-time baseline must then be recorded by exact completed folder name before the account is complete. Later daily packets remain separately counted in the completed-export registry and do not weaken or silently manufacture the baseline claim.
+An Instagram account is accepted as current only after an exact-prefix packet is locally complete, represented in canonical state, and rendered. Localgraph accepts Meta message pages in JSON or HTML and records the detected format counts in each source scan. Previously downloaded HTML packets that predate HTML support are re-evaluated rather than permanently retained as `no-message-files`.
+
+A one-time all-time baseline must then be recorded by exact completed folder name before the account is complete. Recording a verified baseline updates both configuration and the private acceptance receipt immediately; it does not require another network sync to make `status` coherent. When several packets arrive together and their provider activity records do not identify the baseline folder unambiguously, import the supported packets but keep `baseline-required`. Later daily packets remain separately counted in the completed-export registry and do not weaken or silently manufacture the baseline claim.
 
 ## Facebook Page acceptance
 
