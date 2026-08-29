@@ -4,6 +4,10 @@
   "description": "Deterministic custody, identity, acquisition, and freshness gates for private Facebook profile and managed Page messages.",
   "cases": [
     {
+      "id": "test_facebook.FacebookTests.test_privacy_exclusion_removes_account_and_prevents_reconfiguration_or_import",
+      "criterion": "A privacy-excluded former-member profile is removed from active synchronization, cannot be re-enrolled, and cannot import even a packet left under its former private path."
+    },
+    {
       "id": "test_facebook.FacebookTests.test_scan_facebook_source_finds_message_categories_without_reading_bodies",
       "criterion": "Facebook inbox, archived, and request thread packets are discovered without reading or returning private message bodies."
     },

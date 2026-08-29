@@ -111,6 +111,11 @@ def configure_facebook_account(
     records = facebook.setdefault("accounts", {})
     if not isinstance(records, dict):
         raise ValueError("imports.facebook.accounts configuration must be an object")
+    exclusions = facebook.setdefault("excludedAccounts", {})
+    if not isinstance(exclusions, dict):
+        raise ValueError("imports.facebook.excludedAccounts configuration must be an object")
+    if key in exclusions:
+        raise ValueError(f"Facebook account is protected by a privacy exclusion: {key}")
 
     primary_key = str(facebook.get("primaryProfileAccountKey") or "") or None
     is_primary_profile = account_type == "profile" and (primary_key is None or primary_key == key)
@@ -153,6 +158,46 @@ def configure_facebook_account(
     }
 
 
+def exclude_facebook_account(
+    workspace: Workspace,
+    *,
+    account_key: str,
+    reason: str = "privacy-exclusion",
+) -> dict[str, object]:
+    """Remove an account from active synchronization and prevent re-enrollment."""
+    workspace.ensure_workspace(force=False)
+    key = normalize_account_key(account_key)
+    config = load_config(workspace)
+    imports = config.setdefault("imports", {})
+    if not isinstance(imports, dict):
+        raise ValueError("imports configuration must be an object")
+    facebook = imports.setdefault("facebook", {})
+    if not isinstance(facebook, dict):
+        raise ValueError("imports.facebook configuration must be an object")
+    records = facebook.setdefault("accounts", {})
+    exclusions = facebook.setdefault("excludedAccounts", {})
+    if not isinstance(records, dict) or not isinstance(exclusions, dict):
+        raise ValueError("Facebook account configuration must be an object")
+    records.pop(key, None)
+    exclusions[key] = {
+        "reason": reason.strip() or "privacy-exclusion",
+        "excludedAt": _now_iso(),
+    }
+    if facebook.get("primaryProfileAccountKey") == key:
+        facebook.pop("primaryProfileAccountKey", None)
+    _write_config(workspace, config)
+    status_path = _resolve_path(workspace, str(_account_path_defaults(key)["syncStatusPath"]))
+    status_path.unlink(missing_ok=True)
+    _scrub_aggregate_status(workspace, key, active_accounts=len(records))
+    return {
+        "workspace": str(workspace.root),
+        "excluded": True,
+        "activeAccounts": len(records),
+        "excludedAccounts": len(exclusions),
+        "config": str(workspace.config_path),
+    }
+
+
 def facebook_accounts(workspace: Workspace, *, enabled_only: bool = True) -> list[FacebookAccount]:
     config = load_config(workspace)
     imports = config.get("imports")
@@ -185,6 +230,7 @@ def facebook_accounts_status(workspace: Workspace) -> dict[str, object]:
     imports = config.get("imports")
     facebook = imports.get("facebook") if isinstance(imports, dict) else None
     primary_key = facebook.get("primaryProfileAccountKey") if isinstance(facebook, dict) else None
+    exclusions = facebook.get("excludedAccounts") if isinstance(facebook, dict) else None
     items: list[dict[str, object]] = []
     for account in accounts:
         status: dict[str, object] = {"status": "not-checked"}
@@ -208,6 +254,7 @@ def facebook_accounts_status(workspace: Workspace) -> dict[str, object]:
     return {
         "workspace": str(workspace.root),
         "primaryProfileAccountKey": primary_key,
+        "excludedAccounts": len(exclusions) if isinstance(exclusions, dict) else 0,
         "accounts": items,
         "aggregate": aggregate,
     }
@@ -300,4 +347,49 @@ def _unique_names(values: list[str]) -> list[str]:
 def _write_config(workspace: Workspace, config: dict[str, object]) -> None:
     temporary = workspace.config_path.with_name(f".{workspace.config_path.name}.{os.getpid()}.tmp")
     temporary.write_text(f"{json.dumps(config, indent=2, sort_keys=True)}\n", encoding="utf-8")
+    temporary.chmod(0o600)
     os.replace(temporary, workspace.config_path)
+
+
+def _scrub_aggregate_status(workspace: Workspace, key: str, *, active_accounts: int) -> None:
+    path = workspace.state_dir / "facebook-accounts-sync-status.json"
+    payload: dict[str, object] = {}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            loaded = {}
+        if isinstance(loaded, dict):
+            payload = loaded
+    accounts = payload.get("accounts")
+    if not isinstance(accounts, dict):
+        accounts = {}
+    accounts.pop(key, None)
+    statuses = [str(value.get("status")) for value in accounts.values() if isinstance(value, dict)]
+    if not statuses:
+        aggregate_status = "not-configured"
+    elif "pending" in statuses:
+        aggregate_status = "pending"
+    elif "degraded" in statuses:
+        aggregate_status = "degraded"
+    else:
+        aggregate_status = "current"
+    payload.update(
+        {
+            "schemaVersion": int(payload.get("schemaVersion") or 1),
+            "status": aggregate_status,
+            "accountsConfigured": active_accounts,
+            "accountsReady": sum(status != "pending" for status in statuses),
+            "accounts": accounts,
+        }
+    )
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(f"{json.dumps(payload, indent=2, sort_keys=True)}\n", encoding="utf-8")
+    temporary.chmod(0o600)
+    os.replace(temporary, path)
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

@@ -50,7 +50,7 @@ The first implemented importers consume local source material:
   `message`, `chat_message_join`, `chat_handle_join`, and attachment join
   tables.
 
-Both importers normalize into the same canonical tables:
+All three source families normalize into the same canonical tables:
 
 - `identities` for people and generated group identities.
 - `accounts` for source-specific handles.
@@ -105,6 +105,19 @@ authentication cannot erase a working personal-profile projection. Exact-prefix
 authenticated pulls are bounded to Facebook message subtrees. Page recurrence
 is represented as provider-verification-required until the Page settings surface
 proves it; management access is never treated as archive completion.
+Privacy-excluded records are removed from the active registry and retained only
+as ignored private tombstones that prevent accidental re-enrollment. Scheduled
+runs never enumerate an excluded account.
+
+Apple Messages uses a read-only SQLite online backup rather than copying only
+`chat.db`, so committed rows still present in `chat.db-wal` are included. The
+candidate must contain the required Messages tables and pass SQLite integrity
+validation. A hard-linked last-known-good snapshot remains available while the
+iMessage-only canonical projection is transactionally rebuilt; any access,
+validation, import, render, or unexpected-empty failure restores the prior snapshot and
+projection. The iMessage job runs at login and hourly from the internal
+Application Support runtime, shares the Meta jobs' single-writer lock, and
+writes body-free freshness to `state/imessage-sync-status.json`.
 
 Person views are portable context capsules. Generated files provide orientation
 (`index.md`, `llm-context.md`, `timeline.md`, `threads.md`, `groups.md`,

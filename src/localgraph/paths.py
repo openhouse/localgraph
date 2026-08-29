@@ -84,6 +84,10 @@ class Workspace:
     def imessage_chat_db_path(self) -> Path:
         return self.imessage_source_dir / "chat.db"
 
+    @property
+    def imessage_sync_status_path(self) -> Path:
+        return self.state_dir / "imessage-sync-status.json"
+
     def plan(self) -> dict[str, object]:
         return {
             "root": str(self.root),

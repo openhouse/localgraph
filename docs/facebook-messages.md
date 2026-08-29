@@ -89,6 +89,23 @@ An authenticated profile pull lists only exact-prefix Facebook export packets an
 
 Facebook accounts advance independently. A pending Page cannot erase a current personal-profile projection. Before replacing one account's projection, Localgraph requires at least one materialized packet for that account, then rebuilds that account from all of its available packets so provider repagination does not duplicate messages.
 
+## Privacy exclusion
+
+When a personal profile or Page is outside the authorized scope, remove it from
+the active registry and create a private exclusion tombstone:
+
+```bash
+python -m localgraph --root "$HOME/Library/Application Support/Localgraph/workspace" \
+  exclude-facebook-account --account ACCOUNT --reason former-member-privacy
+```
+
+An excluded account is not merely disabled. Scheduled runs do not enumerate or
+import it, and later configuration attempts using the same account key fail.
+The tombstone stays in ignored private configuration and contains only the key,
+reason code, and exclusion time; Localgraph writes that registry owner-only
+(`0600`). The command does not inspect or delete old raw
+paths; custody cleanup, if needed, is a separate explicit action.
+
 ## Freshness and completeness
 
 Run a manual refresh:

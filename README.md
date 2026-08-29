@@ -54,6 +54,8 @@ python -m localgraph --root ~/Localgraph drive-pull
 python -m localgraph --root ~/Localgraph daily-import --me "Jamie Burkart"
 python -m localgraph --root ~/Localgraph instagram-sync --me "Jamie Burkart"
 python -m localgraph --root ~/Localgraph facebook-sync
+python -m localgraph --root ~/Localgraph imessage-sync --me "Jamie Burkart"
+python -m localgraph --root ~/Localgraph imessage-status
 python -m localgraph --root ~/Localgraph render
 python -m localgraph --root ~/Localgraph view-name person "Alice Example" "instagram:alice"
 ```
@@ -68,10 +70,13 @@ configured Drive folder into `sources/instagram-drive-cache`. `instagram-sync`
 accumulates completed `instagram-*` packets under a stable Drive container,
 publishes their cumulative set through the stable `sources/instagram-current`
 directory symlink, imports it, records freshness and history-coverage state,
-and renders views. `daily-import` remains the combined Instagram and iMessage path.
+and renders views. `daily-import` remains the legacy combined Instagram and iMessage path.
 `facebook-sync` independently refreshes every ready Facebook profile or managed
 Page packet, preserves pending accounts, and renders account-scoped Facebook
 thread entry points.
+`imessage-sync` uses SQLite's read-only online-backup mechanism to include
+committed WAL data, atomically replaces the private snapshot and iMessage-only
+canonical projection, records body-free freshness, and renders views.
 `render` builds deterministic
 filesystem views from canonical SQLite state and writes
 `_system/source-manifest.json`.
@@ -132,8 +137,9 @@ python -m localgraph --root ~/Localgraph import \
 ```
 
 On macOS, `~/Library/Messages/chat.db` is usually protected by Full Disk Access.
-The simplest repeatable workflow is to copy `chat.db` plus its `chat.db-wal` and
-`chat.db-shm` siblings into `sources/imessage/`, then run the import there.
+The maintained workflow reads it without modifying it and creates a consistent
+private snapshot under `sources/imessage/chat.db`; manual copying is no longer
+the preferred freshness path. See [Maintained Apple Messages ingestion](docs/imessage-messages.md).
 
 ## Maintained Google Drive Mirror
 
@@ -269,7 +275,18 @@ Application Support log directory.
 
 The older `install-daily-import` command remains available when a single
 once-daily job should import both Instagram and iMessage. It is not the
-preferred freshness loop for the maintained Instagram mirror.
+preferred freshness loop for either maintained source.
+
+Install the focused Apple Messages LaunchAgent separately:
+
+```bash
+python -m localgraph --root "$HOME/Library/Application Support/Localgraph/workspace" \
+  install-imessage-sync --me "Jamie Burkart" --interval-minutes 60
+```
+
+It runs at login and hourly, shares the same private writer lock as the Meta
+jobs, and reports `blocked` or `degraded` rather than overwriting last-known-good
+custody when Full Disk Access or source validation fails.
 
 Generated view paths pair readable labels with a short hash suffix derived from
 a source key:
@@ -317,9 +334,9 @@ views/people/alice-example--3a1f0d22/
 `notes.md` is user-authored and preserved across renders. The other files are
 generated orientation, navigation, provenance, and transcript-link material.
 
-## Meta Message Evals and Hill Climb
+## Message Evals and Hill Climb
 
-The deterministic Instagram and Facebook suites cover the offline PKCE and read-only OAuth
+The deterministic Instagram, Facebook, and Apple Messages suites cover the offline PKCE and read-only OAuth
 contract, bounded cumulative-export selection, explicit baseline completeness,
 atomic completed-mirror publication, cumulative source replacement, stale
 generated-view reconciliation, last-known-good fallback, hourly scheduling,
@@ -329,8 +346,11 @@ atomic multi-account rebuilds, person/organization owner separation,
 account-specific baseline claims, canonical import and rendering, and repository
 workspace compatibility. The Facebook suite additionally verifies profile/Page
 identity separation, body-free registry status, independent pending-account
-semantics, Messages-only Drive scope, and hourly private-registry scheduling. It
-never uses private message bodies as committed fixtures.
+semantics, Messages-only Drive scope, privacy exclusions, and hourly
+private-registry scheduling. The Apple Messages suite verifies WAL-consistent
+online snapshots, atomic source replacement, last-known-good recovery, body-free
+status, resource closure, shared locking, and hourly run-at-login scheduling.
+The suites never use private message bodies as committed fixtures.
 
 ```bash
 make evals

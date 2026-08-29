@@ -14,12 +14,13 @@ from .automation import (
     run_daily_import,
 )
 from .drive import DriveAPIError, authenticate_google_drive, configure_google_drive_api, pull_google_drive_folder
-from .facebook_accounts import configure_facebook_account, facebook_accounts_status
+from .facebook_accounts import configure_facebook_account, exclude_facebook_account, facebook_accounts_status
 from .facebook import scan_facebook_source
 from .facebook_sync import configure_facebook_baseline, install_facebook_sync, run_facebook_sync
 from .ingest import import_workspace_sources
 from .instagram import scan_instagram_source
 from .instagram_accounts import configure_instagram_account, instagram_accounts_status
+from .imessage_sync import imessage_status, install_imessage_sync, run_imessage_sync
 from .paths import Workspace
 from .render import render_views
 from .schema import connect, initialize_schema
@@ -138,6 +139,13 @@ def build_parser() -> argparse.ArgumentParser:
     configure_facebook.add_argument("--reuse-instagram-drive", action="store_true", help="Reuse the configured Instagram Drive container and read-only token.")
     configure_facebook.add_argument("--disabled", action="store_true", help="Keep the record visible but skip automated imports.")
 
+    exclude_facebook = commands.add_parser(
+        "exclude-facebook-account",
+        help="Permanently remove an account from synchronization and block re-enrollment.",
+    )
+    exclude_facebook.add_argument("--account", required=True, help="Stable local account key.")
+    exclude_facebook.add_argument("--reason", default="privacy-exclusion", help="Private exclusion reason code.")
+
     commands.add_parser(
         "facebook-accounts",
         help="List configured Facebook profiles and Pages with body-free sync health.",
@@ -161,6 +169,27 @@ def build_parser() -> argparse.ArgumentParser:
     install_facebook.add_argument("--interval-minutes", type=int, default=60)
     install_facebook.add_argument("--label", default="com.openhouse.localgraph.facebook-sync")
     install_facebook.add_argument("--dry-run", action="store_true")
+
+    imessage_sync = commands.add_parser(
+        "imessage-sync",
+        help="Snapshot the live macOS Messages database and atomically refresh canonical iMessage state.",
+    )
+    imessage_sync.add_argument("--source-db", help="Live chat.db path. Defaults to ~/Library/Messages/chat.db.")
+    imessage_sync.add_argument("--me", default="Me", help="Display name for your own identity. Defaults to 'Me'.")
+    imessage_sync.add_argument("--me-imessage", action="append", default=[], help="Self handle. May be repeated.")
+    imessage_sync.add_argument("--no-render", action="store_true", help="Do not render views after import.")
+
+    commands.add_parser("imessage-status", help="Report body-free Apple Messages freshness and health.")
+
+    install_imessage = commands.add_parser(
+        "install-imessage-sync",
+        help="Install an hourly macOS Apple Messages sync LaunchAgent.",
+    )
+    install_imessage.add_argument("--source-db", help="Live chat.db path. Defaults to ~/Library/Messages/chat.db.")
+    install_imessage.add_argument("--me", default="Me", help="Display name for your own identity. Defaults to 'Me'.")
+    install_imessage.add_argument("--interval-minutes", type=int, default=60)
+    install_imessage.add_argument("--label", default="com.openhouse.localgraph.imessage-sync")
+    install_imessage.add_argument("--dry-run", action="store_true")
 
     drive_pull = commands.add_parser("drive-pull", help="Pull a private Google Drive folder into the local Instagram cache.")
     drive_pull.add_argument("--folder-id", help="Google Drive folder ID. Defaults to configured imports.instagram.googleDriveFolderId.")
@@ -290,6 +319,12 @@ def main(argv: list[str] | None = None) -> int:
                 reuse_instagram_drive=args.reuse_instagram_drive,
                 enabled=not args.disabled,
             )
+        elif args.command == "exclude-facebook-account":
+            summary = exclude_facebook_account(
+                workspace,
+                account_key=args.account,
+                reason=args.reason,
+            )
         elif args.command == "facebook-accounts":
             summary = facebook_accounts_status(workspace)
         elif args.command == "configure-facebook-baseline":
@@ -316,6 +351,36 @@ def main(argv: list[str] | None = None) -> int:
                 workspace,
                 interval_minutes=args.interval_minutes,
                 label=args.label,
+                dry_run=args.dry_run,
+            )
+        elif args.command == "imessage-sync":
+            with instagram_sync_lock(workspace) as acquired:
+                if not acquired:
+                    summary = {
+                        "workspace": str(workspace.root),
+                        "imessageSync": {
+                            "schemaVersion": 1,
+                            "status": "skipped-concurrent",
+                            "lockPath": str(workspace.state_dir / "instagram-sync.lock"),
+                        },
+                    }
+                else:
+                    summary = run_imessage_sync(
+                        workspace,
+                        live_db_path=Path(args.source_db) if args.source_db else None,
+                        me_name=args.me,
+                        me_handles=args.me_imessage,
+                        render=not args.no_render,
+                    )
+        elif args.command == "imessage-status":
+            summary = imessage_status(workspace)
+        elif args.command == "install-imessage-sync":
+            summary = install_imessage_sync(
+                workspace,
+                interval_minutes=args.interval_minutes,
+                label=args.label,
+                live_db_path=Path(args.source_db) if args.source_db else None,
+                me_name=args.me,
                 dry_run=args.dry_run,
             )
         elif args.command == "drive-pull":

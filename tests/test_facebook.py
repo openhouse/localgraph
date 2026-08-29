@@ -14,6 +14,90 @@ from localgraph.cli import main
 
 
 class FacebookTests(unittest.TestCase):
+    def test_privacy_exclusion_removes_account_and_prevents_reconfiguration_or_import(self) -> None:
+        """Catch a former member's personal profile being re-enrolled or imported after exclusion."""
+        import localgraph.facebook_accounts as accounts_module
+        from localgraph.facebook_accounts import configure_facebook_account, facebook_accounts
+        from localgraph.paths import Workspace
+
+        exclude = getattr(accounts_module, "exclude_facebook_account", None)
+        self.assertTrue(callable(exclude), "exclude_facebook_account is missing")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Workspace(Path(tmp) / "graph")
+            configure_facebook_account(
+                workspace,
+                account_key="former-member",
+                display_name="Former Member",
+                account_type="profile",
+                provider_state="active",
+                self_names=["Former Member"],
+            )
+            write_facebook_packet(
+                workspace.root
+                / "sources/facebook-accounts/former-member/incoming/facebook-former-member-2026-08-29-export",
+                owner="Former Member",
+                content="private excluded content",
+            )
+            account_status = workspace.root / "state/facebook-accounts/former-member/sync-status.json"
+            account_status.parent.mkdir(parents=True, exist_ok=True)
+            account_status.write_text(
+                json.dumps({"accountKey": "former-member", "status": "pending"}),
+                encoding="utf-8",
+            )
+            aggregate_status = workspace.state_dir / "facebook-accounts-sync-status.json"
+            aggregate_status.write_text(
+                json.dumps(
+                    {
+                        "status": "pending",
+                        "accountsConfigured": 1,
+                        "accountsReady": 0,
+                        "accounts": {"former-member": {"status": "pending"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = exclude(workspace, account_key="former-member", reason="former-member-privacy")
+
+            self.assertTrue(result["excluded"])
+            self.assertEqual(result["activeAccounts"], 0)
+            self.assertEqual(facebook_accounts(workspace, enabled_only=False), [])
+            config = json.loads(workspace.config_path.read_text(encoding="utf-8"))
+            facebook = config["imports"]["facebook"]
+            self.assertNotIn("former-member", facebook["accounts"])
+            self.assertNotIn("primaryProfileAccountKey", facebook)
+            self.assertEqual(
+                facebook["excludedAccounts"]["former-member"]["reason"],
+                "former-member-privacy",
+            )
+            self.assertEqual(workspace.config_path.stat().st_mode & 0o777, 0o600)
+            self.assertFalse(account_status.exists())
+            scrubbed = json.loads(aggregate_status.read_text(encoding="utf-8"))
+            self.assertEqual(scrubbed["accounts"], {})
+            self.assertEqual(scrubbed["accountsConfigured"], 0)
+            self.assertEqual(scrubbed["status"], "not-configured")
+
+            with self.assertRaisesRegex(ValueError, "privacy exclusion"):
+                configure_facebook_account(
+                    workspace,
+                    account_key="former-member",
+                    display_name="Former Member",
+                    account_type="profile",
+                    provider_state="active",
+                    self_names=["Former Member"],
+                )
+
+            code, stdout = run_cli(["--root", str(workspace.root), "facebook-sync", "--no-render"])
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(stdout)["facebookSync"]["status"], "not-configured")
+            self.assertNotIn("private excluded content", stdout)
+            with contextlib.closing(sqlite3.connect(workspace.database_path)) as db:
+                messages = db.execute(
+                    "SELECT COUNT(*) FROM messages JOIN threads ON threads.id = messages.thread_id "
+                    "WHERE threads.source_kind = 'facebook'"
+                ).fetchone()[0]
+            self.assertEqual(messages, 0)
+
     def test_scan_facebook_source_finds_message_categories_without_reading_bodies(self) -> None:
         from localgraph.facebook import scan_facebook_source
 

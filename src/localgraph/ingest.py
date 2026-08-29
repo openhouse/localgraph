@@ -136,6 +136,38 @@ def clear_instagram_projection(db: sqlite3.Connection) -> dict[str, int]:
     return counts
 
 
+def clear_imessage_projection(db: sqlite3.Connection) -> dict[str, int]:
+    """Remove source-derived iMessage state inside the caller's transaction."""
+    counts = {
+        "sourceImports": int(
+            db.execute("SELECT COUNT(*) FROM source_imports WHERE source_kind = 'imessage'").fetchone()[0]
+        ),
+        "threads": int(db.execute("SELECT COUNT(*) FROM threads WHERE source_kind = 'imessage'").fetchone()[0]),
+        "messages": int(
+            db.execute(
+                "SELECT COUNT(*) FROM messages JOIN threads ON threads.id = messages.thread_id "
+                "WHERE threads.source_kind = 'imessage'"
+            ).fetchone()[0]
+        ),
+        "accounts": int(db.execute("SELECT COUNT(*) FROM accounts WHERE source_kind = 'imessage'").fetchone()[0]),
+        "identities": int(
+            db.execute(
+                "SELECT COUNT(*) FROM identities WHERE stable_key GLOB 'person:imessage:*' "
+                "OR stable_key GLOB 'group:imessage:*'"
+            ).fetchone()[0]
+        ),
+    }
+    db.execute("DELETE FROM source_imports WHERE source_kind = 'imessage'")
+    db.execute("DELETE FROM threads WHERE source_kind = 'imessage'")
+    db.execute("DELETE FROM accounts WHERE source_kind = 'imessage'")
+    db.execute("DELETE FROM graph_edges WHERE source = 'imessage-import'")
+    db.execute(
+        "DELETE FROM identities WHERE stable_key GLOB 'person:imessage:*' "
+        "OR stable_key GLOB 'group:imessage:*'"
+    )
+    return counts
+
+
 def import_instagram_source(
     db: sqlite3.Connection,
     source_path: Path,
@@ -558,6 +590,7 @@ def import_imessage_chat_db(
     me_name: str = "Me",
     me_handles: list[str] | None = None,
     explicit: bool = False,
+    commit: bool = True,
 ) -> SourceImportResult:
     source = chat_db_path.expanduser().resolve()
     result = SourceImportResult("imessage", str(source))
@@ -766,7 +799,8 @@ def import_imessage_chat_db(
     finally:
         source_db.close()
 
-    db.commit()
+    if commit:
+        db.commit()
     result.threads = len(seen_threads)
     result.groups = len(seen_groups)
     result.accounts = len(seen_accounts) + 1
