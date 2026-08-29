@@ -59,7 +59,7 @@ class CliTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     protocol["recurring"],
-                    {"cadence": "daily", "durationYears": 3},
+                    {"cadence": "daily", "dateRange": "all-time", "durationYears": 3},
                 )
                 self.assertEqual(protocol["exportNamePrefix"], f"instagram-{account_key}-")
 

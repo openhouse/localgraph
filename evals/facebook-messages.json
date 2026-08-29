@@ -13,7 +13,7 @@
     },
     {
       "id": "test_facebook.FacebookTests.test_facebook_registry_reports_profile_and_page_protocols_without_private_ids",
-      "criterion": "The body-free registry distinguishes profile and Page export surfaces, active state, verified versus unverified recurrence support, and omits private provider IDs."
+      "criterion": "The body-free registry distinguishes profile and Page export surfaces, active state, all-time-lookback daily requirements, verified versus unverified recurrence support, and omits private provider IDs."
     },
     {
       "id": "test_facebook.FacebookTests.test_facebook_sync_updates_ready_accounts_without_erasing_pending_pages",

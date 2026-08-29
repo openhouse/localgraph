@@ -18,7 +18,7 @@ def required_provider_export_protocol(export_name_prefix: str) -> dict[str, obje
         "destination": "google-drive",
         "information": ["messages"],
         "baseline": {"cadence": "once", "dateRange": "all-time"},
-        "recurring": {"cadence": "daily", "durationYears": 3},
+        "recurring": {"cadence": "daily", "dateRange": "all-time", "durationYears": 3},
         "exportNamePrefix": export_name_prefix,
     }
 

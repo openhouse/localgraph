@@ -22,7 +22,12 @@ def required_provider_export_protocol(account_type: str, export_name_prefix: str
         "destination": "google-drive" if verified else "provider-destination-verification-required",
         "information": ["messages"],
         "baseline": {"cadence": "once", "dateRange": "all-time", "support": support},
-        "recurring": {"cadence": "daily", "durationYears": 3, "support": support},
+        "recurring": {
+            "cadence": "daily",
+            "dateRange": "all-time",
+            "durationYears": 3,
+            "support": support,
+        },
         "exportNamePrefix": export_name_prefix,
     }
 

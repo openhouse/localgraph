@@ -5,7 +5,7 @@
   "cases": [
     {
       "id": "test_cli.CliTests.test_instagram_accounts_status_applies_standard_export_protocol_to_every_profile",
-      "criterion": "Every configured Instagram profile exposes the same messages-only Google Drive protocol: one all-time baseline followed by daily incremental exports for three years, with an account-specific packet prefix."
+      "criterion": "Every configured Instagram profile exposes the same messages-only Google Drive protocol: one all-time baseline followed by all-time-lookback daily exports for three years, with an account-specific packet prefix."
     },
     {
       "id": "test_automation.AutomationTests.test_multi_account_launchagent_reads_accounts_from_config",

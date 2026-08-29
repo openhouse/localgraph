@@ -168,7 +168,12 @@ class FacebookTests(unittest.TestCase):
             self.assertEqual(accounts["example-person"]["ownerIdentityKey"], "person:self")
             self.assertEqual(
                 accounts["example-person"]["requiredProviderExportProtocol"]["recurring"],
-                {"cadence": "daily", "durationYears": 3, "support": "verified-in-accounts-center"},
+                {
+                    "cadence": "daily",
+                    "dateRange": "all-time",
+                    "durationYears": 3,
+                    "support": "verified-in-accounts-center",
+                },
             )
             self.assertEqual(accounts["example-page"]["ownerKind"], "organization")
             self.assertEqual(

@@ -28,7 +28,7 @@ The verified Accounts Center path is:
 1. Open **Your information and permissions → Export your information → Create export**.
 2. Select only the Facebook profile.
 3. Create a one-time **Messages**, **All time** export to Google Drive.
-4. Create a second **Messages** export to Google Drive, **Daily**, for **3 years**.
+4. Create a second **Messages**, **All time** export to Google Drive, **Daily**, for **3 years**.
 5. Accept the narrowly displayed Google Drive permission for provider-created files.
 6. Verify both entries in Meta's export activity before calling the provider configuration scheduled.
 7. After the all-time packet is fully local, run `configure-facebook-baseline` with its exact folder name.
