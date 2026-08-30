@@ -17,6 +17,7 @@ from .facebook_accounts import FacebookAccount, facebook_accounts
 from .instagram_accounts import InstagramAccount, instagram_accounts
 from .paths import Workspace
 from .twitter_accounts import TwitterAccount, twitter_accounts
+from .whatsapp import source_status as whatsapp_source_status
 
 
 LAUNCHAGENT_LABELS = {
@@ -24,6 +25,7 @@ LAUNCHAGENT_LABELS = {
     "facebook": "com.openhouse.localgraph.facebook-sync",
     "twitter": "com.openhouse.localgraph.twitter-sync",
     "imessage": "com.openhouse.localgraph.imessage-sync",
+    "whatsapp": "com.openhouse.localgraph.whatsapp-sync",
 }
 LIFECYCLE_STAGES = (
     "configured",
@@ -63,6 +65,7 @@ def build_localgraph_status(
         "facebook": _facebook_source_status(workspace, schedulers["facebook"], observed_at),
         "twitter": _twitter_source_status(workspace, schedulers["twitter"], observed_at),
         "imessage": _imessage_source_status(workspace, schedulers["imessage"], observed_at),
+        "whatsapp": whatsapp_source_status(workspace, schedulers["whatsapp"], observed_at),
     }
     finding_counts = {"error": 0, "warning": 0, "info": 0}
     for source in sources.values():

@@ -33,6 +33,7 @@ from .status import build_localgraph_status, record_lifecycle_stage
 from .twitter_accounts import configure_twitter_account, twitter_accounts_status
 from .twitter_sync import install_twitter_sync, run_twitter_sync
 from .views import view_kinds, view_path
+from .whatsapp import configure_chat, install_whatsapp_sync, record_export, record_acquisition_failure, run_whatsapp_sync
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,6 +48,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     commands = parser.add_subparsers(dest="command", required=True)
+
+    whatsapp = commands.add_parser("configure-whatsapp-chat", help="Explicitly bind one approved private WhatsApp chat.")
+    whatsapp.add_argument("--account", required=True)
+    whatsapp.add_argument("--chat", required=True)
+    whatsapp.add_argument("--title", required=True)
+    whatsapp.add_argument("--kind", choices=("direct", "group"), required=True)
+    whatsapp.add_argument("--date-order", choices=("mdy", "dmy"), required=True)
+    whatsapp.add_argument("--timezone", required=True)
+    whatsapp.add_argument("--disabled", action="store_true")
+    delivery = commands.add_parser("whatsapp-deliver", help="Validate, copy and bind a completed native or historical chat export.")
+    delivery.add_argument("--account", required=True)
+    delivery.add_argument("--chat", required=True)
+    delivery.add_argument("--archive", type=Path, required=True)
+    delivery.add_argument("--observed-title", required=True)
+    delivery.add_argument("--exported-at", required=True)
+    delivery.add_argument("--origin", choices=("mac-native", "phone-export", "historical-local"), required=True)
+    delivery.add_argument("--media-requested", action="store_true")
+    failed = commands.add_parser("whatsapp-acquisition-failed", help="Record a body-free native acquisition failure.")
+    failed.add_argument("--account", required=True)
+    failed.add_argument("--chat", required=True)
+    failed.add_argument("--reason", required=True, choices=("session-unavailable", "app-disconnected", "export-control-changed", "export-failed", "identity-unverified"))
+    commands.add_parser("whatsapp-sync", help="Import accepted WhatsApp archives and atomically refresh chat views.")
+    wa_install = commands.add_parser("install-whatsapp-sync", help="Install the local WhatsApp import watcher; native exports are separate.")
+    wa_install.add_argument("--interval-minutes", type=int, default=60)
+    wa_install.add_argument("--dry-run", action="store_true")
 
     commands.add_parser("plan", help="Print the planned private root and view layout.")
 
@@ -402,6 +428,23 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "facebook-accounts":
             summary = facebook_accounts_status(workspace)
+        elif args.command == "configure-whatsapp-chat":
+            summary = configure_chat(workspace, account_key=args.account, chat_key=args.chat, title=args.title,
+                                     kind=args.kind, date_order=args.date_order, timezone_name=args.timezone,
+                                     enabled=not args.disabled)
+        elif args.command == "whatsapp-deliver":
+            summary = record_export(workspace, account_key=args.account, chat_key=args.chat, archive=args.archive,
+                                    observed_title=args.observed_title, exported_at=args.exported_at,
+                                    media_requested=args.media_requested, origin=args.origin)
+        elif args.command == "whatsapp-acquisition-failed":
+            summary = record_acquisition_failure(workspace, account_key=args.account, chat_key=args.chat, reason=args.reason)
+        elif args.command == "whatsapp-sync":
+            summary = run_whatsapp_sync(workspace)
+            if summary["status"] == "degraded":
+                print(json.dumps(summary, indent=2, sort_keys=True))
+                return 1
+        elif args.command == "install-whatsapp-sync":
+            summary = install_whatsapp_sync(workspace, interval_minutes=args.interval_minutes, dry_run=args.dry_run)
         elif args.command == "configure-twitter-account":
             summary = configure_twitter_account(
                 workspace,

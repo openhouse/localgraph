@@ -307,7 +307,7 @@ class SourceHealthTests(unittest.TestCase):
 
             self.assertEqual(code, 0)
             payload = json.loads(stdout)
-            self.assertEqual(set(payload["sources"]), {"instagram", "facebook", "twitter", "imessage"})
+            self.assertEqual(set(payload["sources"]), {"instagram", "facebook", "twitter", "imessage", "whatsapp"})
             self.assertEqual(payload["sources"]["instagram"]["accounts"][0]["accountKey"], "example")
             self.assertEqual(payload["sources"]["imessage"]["accounts"][0]["accountKey"], "local-macos-messages")
             self.assertNotIn("private body marker", stdout)

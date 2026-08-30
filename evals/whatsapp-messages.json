@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "suite": "whatsapp-messages",
+  "cases": [
+    "test_whatsapp.WhatsAppTests.test_multiline_timezone_and_repeated_identical_messages",
+    "test_whatsapp.WhatsAppTests.test_overlap_shorter_exports_and_repeat_acquisition_preserve_history",
+    "test_whatsapp.WhatsAppTests.test_delivered_archive_has_verified_private_custody",
+    "test_whatsapp.WhatsAppTests.test_wrong_chat_binding_and_unqualified_time_are_rejected",
+    "test_whatsapp.WhatsAppTests.test_invalid_zip_paths_symlinks_and_multiple_transcripts_are_rejected",
+    "test_whatsapp.WhatsAppTests.test_malformed_and_empty_exports_never_replace_good_projection",
+    "test_whatsapp.WhatsAppTests.test_custody_tampering_preserves_last_good_and_other_chats_advance",
+    "test_whatsapp.WhatsAppTests.test_media_is_copied_to_content_addressed_custody_and_missing_is_reported",
+    "test_whatsapp.WhatsAppTests.test_dmy_android_system_events_unicode_and_dst_ambiguity",
+    "test_whatsapp.WhatsAppTests.test_render_failure_rolls_back_database_and_preserves_transcript",
+    "test_whatsapp.WhatsAppTests.test_reimport_does_not_make_old_acquisition_fresh_or_history_complete",
+    "test_whatsapp.WhatsAppTests.test_renamed_chat_retains_path_and_unknown_chat_is_not_imported",
+    "test_whatsapp.WhatsAppTests.test_historical_adoption_does_not_claim_current_native_acquisition",
+    "test_whatsapp.WhatsAppTests.test_shared_lock_prevents_concurrent_import",
+    "test_whatsapp.WhatsAppTests.test_installed_job_imports_using_its_runtime",
+    "test_whatsapp.WhatsAppTests.test_missing_prior_receipts_degrade_without_losing_last_success",
+    "test_whatsapp.WhatsAppTests.test_delivery_precedes_import_in_lifecycle_and_canonical_loss_is_detected",
+    "test_whatsapp.WhatsAppTests.test_changed_render_is_detected_and_native_failure_cannot_be_hidden_by_import",
+    "test_whatsapp.WhatsAppTests.test_malformed_timestamp_line_is_not_silently_folded_into_previous_message",
+    "test_whatsapp.WhatsAppTests.test_native_acquisition_cannot_be_backdated_before_export_messages",
+    "test_whatsapp.WhatsAppTests.test_generated_view_symlink_cannot_redirect_writes_outside_the_chat",
+    "test_whatsapp.WhatsAppTests.test_partial_receipt_loss_is_detected",
+    "test_whatsapp.WhatsAppTests.test_status_reads_committed_wal_and_pending_delivery_blocks_current",
+    "test_whatsapp.WhatsAppTests.test_corrupt_receipt_is_a_health_error_not_a_status_crash"
+  ]
+}

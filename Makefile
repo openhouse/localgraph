@@ -8,6 +8,7 @@ evals:
 	PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) scripts/run_facebook_evals.py
 	PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) scripts/run_twitter_evals.py
 	PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) scripts/run_imessage_evals.py
+	PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -W error::ResourceWarning scripts/run_whatsapp_evals.py
 
 test:
 	PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m unittest discover -s tests -v

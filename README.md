@@ -350,6 +350,12 @@ generated orientation, navigation, provenance, and transcript-link material.
 
 ## Message Evals and Hill Climb
 
+WhatsApp supports explicitly bound native chat exports, cumulative private
+ingestion, stable transcript views, and separate acquisition/import health.
+See [Maintained WhatsApp exports](docs/whatsapp-messages.md) for the native
+acquisition protocol, hourly importer, daily Codex task, and coverage limits.
+`make hill-climb` includes the synthetic WhatsApp acceptance and failure suite.
+
 The deterministic source-health, Instagram, Facebook, and Apple Messages suites cover the offline PKCE and read-only OAuth
 contract, bounded cumulative-export selection, explicit baseline completeness,
 atomic completed-mirror publication, cumulative source replacement, stale

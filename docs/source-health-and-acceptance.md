@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Localgraph uses one body-free operator report for Instagram, Facebook, and Apple Messages:
+Localgraph uses one body-free operator report for Instagram, Facebook, X/Twitter, Apple Messages, and WhatsApp:
 
 ```bash
 python -m localgraph \
@@ -91,6 +91,12 @@ python -m localgraph --root "$LOCALGRAPH_ROOT" \
 Use `--capability unsupported` when the inspected Page surface does not offer an export Localgraph can accept. Verification never propagates to another Page. Deactivated, disabled, unverified, and verified-unsupported Pages remain visible in status but are not synchronized.
 
 ## Release acceptance
+
+WhatsApp uses explicit chat bindings and separates daily native acquisition from
+the hourly local importer. Its lifecycle is derived from private delivery
+receipts, canonical counts, transcript checksums, and separate acquisition/import
+freshness. Desktop exports do not establish all-time completeness. See the
+[WhatsApp operator protocol](whatsapp-messages.md) for setup, recovery, and limits.
 
 For a Source Health and Acceptance release:
 
