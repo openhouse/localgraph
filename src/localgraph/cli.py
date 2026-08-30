@@ -84,6 +84,13 @@ def build_parser() -> argparse.ArgumentParser:
     wa_acquire.add_argument("--inventory-only", action="store_true")
     wa_acquire.add_argument("--chat", action="append", help="Restrict acquisition to a local key for acceptance; inventory still covers all chats.")
     wa_acquire.add_argument("--downloads", type=Path)
+    wa_discover = commands.add_parser("whatsapp-discover", help="Update population evidence without exporting any chat.")
+    wa_discover.add_argument("--if-due", action="store_true", help="Skip a fresh successful discovery of this candidate and policy.")
+    wa_refresh = commands.add_parser("whatsapp-refresh", help="Resume bounded per-chat refreshes independently of discovery.")
+    wa_refresh.add_argument("--chat", action="append")
+    wa_refresh.add_argument("--max-chats", type=int, default=10)
+    wa_refresh.add_argument("--force", action="store_true", help="Refresh even recently accepted chats for live acceptance.")
+    wa_refresh.add_argument("--downloads", type=Path)
     wa_acq_install = commands.add_parser("install-whatsapp-acquisition", help="Install the verified AppleScript acquisition LaunchAgent.")
     wa_acq_install.add_argument("--hour", type=int, default=9)
     wa_acq_install.add_argument("--dry-run", action="store_true")
@@ -462,9 +469,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "configure-whatsapp-acquisition":
             summary = configure_acquisition(workspace, account=args.account, expected_profile=args.expected_profile,
                                             date_order=args.date_order, timezone_name=args.timezone)
-        elif args.command == "whatsapp-acquire":
-            summary = run_acquisition(workspace, downloads=args.downloads, inventory_only=args.inventory_only,
-                                      chat_keys=args.chat)
+        elif args.command in {"whatsapp-acquire", "whatsapp-discover", "whatsapp-refresh"}:
+            summary = run_acquisition(workspace, downloads=getattr(args, "downloads", None),
+                inventory_only=args.command == "whatsapp-discover" or getattr(args, "inventory_only", False),
+                chat_keys=getattr(args, "chat", None), refresh_only=args.command == "whatsapp-refresh",
+                resume=args.command == "whatsapp-refresh" and not args.force, max_chats=getattr(args, "max_chats", None),
+                discovery_if_due=getattr(args, "if_due", False))
             if summary["status"] == "degraded":
                 print(json.dumps(summary, indent=2, sort_keys=True))
                 return 1

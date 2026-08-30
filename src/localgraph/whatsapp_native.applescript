@@ -185,7 +185,8 @@ end rowTitle
 
 on listTitles(listNode)
     set resultTitles to {}
-    set chatRows to visibleChatRows(listNode)
+    -- Passive scans may read prefetched cells for overlap, but never interact with them.
+    tell application "/System/Library/CoreServices/System Events.app" to set chatRows to buttons of listNode
     repeat with rowRef in chatRows
         set end of resultTitles to rowTitle(contents of rowRef)
     end repeat
@@ -215,20 +216,36 @@ on chatKind(rowNode)
     error "export-control-changed"
 end chatKind
 
-on listEntries(listNode)
+on shouldInspectRow(observedTitle, targetTitle, isVisible)
+    return targetTitle is not "" and observedTitle is targetTitle and isVisible
+end shouldInspectRow
+
+on listEntries(listNode, targetTitle)
     set originalTitles to listTitles(listNode)
     set resultEntries to {}
-    set chatRows to visibleChatRows(listNode)
+    tell application "/System/Library/CoreServices/System Events.app" to set chatRows to buttons of listNode
+    if targetTitle is not "" then
+        set toolbarNode to findID(appWindow(), "Toolbar", 0)
+        if toolbarNode is missing value then error "inventory-incomplete"
+        tell application "/System/Library/CoreServices/System Events.app" to set viewport to my chatViewport(position of listNode, size of listNode, position of toolbarNode, size of toolbarNode)
+    end if
     repeat with rowRef in chatRows
         set observedTitle to rowTitle(contents of rowRef)
-        set observedKind to chatKind(contents of rowRef)
+        set observedKind to "unknown"
+        set rowVisible to false
+        if targetTitle is not "" and observedTitle is targetTitle then
+            tell application "/System/Library/CoreServices/System Events.app" to set rowVisible to my isCenterVisible(position of rowRef, size of rowRef, item 1 of viewport, item 2 of viewport)
+        end if
+        if shouldInspectRow(observedTitle, targetTitle, rowVisible) then
+            set observedKind to chatKind(contents of rowRef)
+        end if
         set end of resultEntries to {|title|:observedTitle, |kind|:observedKind}
     end repeat
     if listTitles(listNode) is not originalTitles then error "inventory-changed-during-scan"
     return resultEntries
 end listEntries
 
-on inventoryList(listName)
+on inventoryList(listName, targetTitle)
     set listNode to selectList(listName)
     set previousTitles to listTitles(listNode)
     set topReached to false
@@ -256,7 +273,7 @@ on inventoryList(listName)
     end repeat
     if not topReached then error "inventory-incomplete"
     set currentTitles to listTitles(listNode)
-    set collectedPages to {listEntries(listNode)}
+    set collectedPages to {listEntries(listNode, targetTitle)}
     set testedRoundTrip to false
     repeat 500 times
         tell application "/System/Library/CoreServices/System Events.app"
@@ -275,7 +292,7 @@ on inventoryList(listName)
             if listTitles(listNode) is not nextTitles then error "inventory-changed-during-scan"
             set testedRoundTrip to true
         end if
-        if nextTitles is not currentTitles then set end of collectedPages to listEntries(listNode)
+        if nextTitles is not currentTitles then set end of collectedPages to listEntries(listNode, targetTitle)
         set currentTitles to nextTitles
     end repeat
     error "inventory-incomplete"
@@ -385,18 +402,21 @@ end exportChat
 on run argv
     if (count argv) < 2 then error "unsupported-operation"
     set operationName to item 1 of argv
-    if operationName is not in {"inventory", "export"} then error "unsupported-operation"
+    if operationName is not in {"inventory", "resolve", "export"} then error "unsupported-operation"
     if operationName is "export" and ((count argv) is not in {4, 5}) then error "invalid-export-arguments"
     if operationName is "inventory" and ((count argv) is not 2) then error "invalid-inventory-arguments"
-    set observed to verifyProfile(item 2 of argv)
-    if operationName is "inventory" then
-        set mainTitles to inventoryList("main")
-        set archivedTitles to inventoryList("archived")
-        selectList("main")
-        return jsonText({|operation|:"inventory", |status|:"ok", |profile|:observed, |pages|:{|main|:mainTitles, |archived|:archivedTitles}})
-    end if
+    if operationName is "resolve" and ((count argv) is not 3) then error "invalid-resolve-arguments"
     set expectedKind to "unknown"
     if (count argv) is 5 then set expectedKind to item 5 of argv
     if expectedKind is not in {"unknown", "direct", "group"} then error "invalid-export-arguments"
+    set observed to verifyProfile(item 2 of argv)
+    if operationName is in {"inventory", "resolve"} then
+        set targetTitle to ""
+        if operationName is "resolve" then set targetTitle to item 3 of argv
+        set mainTitles to inventoryList("main", targetTitle)
+        set archivedTitles to inventoryList("archived", targetTitle)
+        selectList("main")
+        return jsonText({|operation|:operationName, |status|:"ok", |profile|:observed, |pages|:{|main|:mainTitles, |archived|:archivedTitles}})
+    end if
     return jsonText(exportChat(item 3 of argv, item 4 of argv, expectedKind))
 end run

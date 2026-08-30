@@ -202,7 +202,8 @@ def _read_bundle(data: bytes, record: dict) -> tuple[list[dict], dict[str, bytes
 
 def record_export(workspace: Workspace, *, account_key: str, chat_key: str, archive: Path,
                   observed_title: str, exported_at: str, media_requested: bool,
-                  origin: str = "mac-native") -> dict:
+                  origin: str = "mac-native", expected_binding: dict | None = None,
+                  expected_policy: dict | None = None) -> dict:
     observed = _time(exported_at)
     if origin not in {"mac-native", "phone-export", "historical-local"}:
         raise ValueError("unsupported WhatsApp acquisition origin")
@@ -212,6 +213,10 @@ def record_export(workspace: Workspace, *, account_key: str, chat_key: str, arch
         if not acquired:
             raise ValueError("Localgraph writer is busy")
         record = _chat(workspace, account_key, chat_key)
+        if expected_binding is not None and record != expected_binding:
+            raise ValueError("identity-unverified")
+        if expected_policy is not None and _load(workspace.config_path).get("imports", {}).get("whatsapp", {}).get("acquisition") != expected_policy:
+            raise ValueError("identity-unverified")
         if observed_title != record["title"]:
             raise ValueError("WhatsApp chat title does not match the explicit binding")
         archive = Path(archive)
@@ -400,7 +405,8 @@ def run_whatsapp_sync(workspace: Workspace, *, now: datetime | None = None) -> d
         return {"status": "degraded" if any(r["status"] == "degraded" for r in results) else ("local-current" if results and all(r["status"] == "local-current" for r in results) else "export-required"), "chats": results}
 
 
-def source_status(workspace: Workspace, scheduler: dict, now: datetime, acquisition_scheduler: dict | None = None) -> dict:
+def source_status(workspace: Workspace, scheduler: dict, now: datetime, acquisition_scheduler: dict | None = None,
+                  discovery_scheduler: dict | None = None) -> dict:
     from .status import _health, _scheduler_findings, _source_report
     by_account: dict[str, list[dict]] = {}
     policy = _load(workspace.config_path).get("imports", {}).get("whatsapp", {}).get("acquisition", {})
@@ -494,13 +500,17 @@ def source_status(workspace: Workspace, scheduler: dict, now: datetime, acquisit
             findings.append({"code": "whatsapp-population-incomplete", "severity": "warning"})
         if population.get("lastError"):
             findings.append({"code": "native-population-acquisition-failed", "severity": "error"})
+        if population.get("discoveryError"):
+            findings.append({"code": "native-population-discovery-failed", "severity": "error"})
         accounts.append({"accountKey": key, "health": _health(findings), "findings": findings,
                          "population": population, "chats": records})
-    if acquisition_scheduler is not None:
-        scheduler = {**scheduler, "acquisition": acquisition_scheduler}
+    for role, native_scheduler in (("acquisition", acquisition_scheduler), ("discovery", discovery_scheduler)):
+        if native_scheduler is None:
+            continue
+        scheduler = {**scheduler, role: native_scheduler}
         for account in accounts:
-            extra = _scheduler_findings(acquisition_scheduler)
-            account["findings"].extend({**f, "code": "acquisition-" + f["code"]} for f in extra)
+            extra = _scheduler_findings(native_scheduler)
+            account["findings"].extend({**f, "code": role + "-" + f["code"]} for f in extra)
             account["health"] = _health(account["findings"])
     return _source_report("whatsapp", scheduler, accounts, _scheduler_findings(scheduler) if accounts else [])
 
