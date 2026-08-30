@@ -34,6 +34,7 @@ from .twitter_accounts import configure_twitter_account, twitter_accounts_status
 from .twitter_sync import install_twitter_sync, run_twitter_sync
 from .views import view_kinds, view_path
 from .whatsapp import configure_chat, install_whatsapp_sync, record_export, record_acquisition_failure, run_whatsapp_sync
+from .whatsapp_acquisition import configure_acquisition, run_acquisition, install_acquisition
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -73,6 +74,19 @@ def build_parser() -> argparse.ArgumentParser:
     wa_install = commands.add_parser("install-whatsapp-sync", help="Install the local WhatsApp import watcher; native exports are separate.")
     wa_install.add_argument("--interval-minutes", type=int, default=60)
     wa_install.add_argument("--dry-run", action="store_true")
+    wa_native = commands.add_parser("configure-whatsapp-acquisition", help="Authorize native AppleScript discovery and acquisition for all Mac chats.")
+    wa_native.add_argument("--account", required=True)
+    wa_native.add_argument("--expected-profile", required=True, help="Verified reserved WhatsApp username.")
+    wa_native.add_argument("--date-order", choices=("mdy", "dmy"), required=True)
+    wa_native.add_argument("--timezone", required=True)
+    wa_native.add_argument("--all-chats", action="store_true", required=True)
+    wa_acquire = commands.add_parser("whatsapp-acquire", help="Discover and export native chats, validate delivery, import and render.")
+    wa_acquire.add_argument("--inventory-only", action="store_true")
+    wa_acquire.add_argument("--chat", action="append", help="Restrict acquisition to a local key for acceptance; inventory still covers all chats.")
+    wa_acquire.add_argument("--downloads", type=Path)
+    wa_acq_install = commands.add_parser("install-whatsapp-acquisition", help="Install the verified AppleScript acquisition LaunchAgent.")
+    wa_acq_install.add_argument("--hour", type=int, default=9)
+    wa_acq_install.add_argument("--dry-run", action="store_true")
 
     commands.add_parser("plan", help="Print the planned private root and view layout.")
 
@@ -445,6 +459,17 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
         elif args.command == "install-whatsapp-sync":
             summary = install_whatsapp_sync(workspace, interval_minutes=args.interval_minutes, dry_run=args.dry_run)
+        elif args.command == "configure-whatsapp-acquisition":
+            summary = configure_acquisition(workspace, account=args.account, expected_profile=args.expected_profile,
+                                            date_order=args.date_order, timezone_name=args.timezone)
+        elif args.command == "whatsapp-acquire":
+            summary = run_acquisition(workspace, downloads=args.downloads, inventory_only=args.inventory_only,
+                                      chat_keys=args.chat)
+            if summary["status"] == "degraded":
+                print(json.dumps(summary, indent=2, sort_keys=True))
+                return 1
+        elif args.command == "install-whatsapp-acquisition":
+            summary = install_acquisition(workspace, hour=args.hour, dry_run=args.dry_run)
         elif args.command == "configure-twitter-account":
             summary = configure_twitter_account(
                 workspace,

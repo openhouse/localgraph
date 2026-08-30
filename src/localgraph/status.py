@@ -65,7 +65,10 @@ def build_localgraph_status(
         "facebook": _facebook_source_status(workspace, schedulers["facebook"], observed_at),
         "twitter": _twitter_source_status(workspace, schedulers["twitter"], observed_at),
         "imessage": _imessage_source_status(workspace, schedulers["imessage"], observed_at),
-        "whatsapp": whatsapp_source_status(workspace, schedulers["whatsapp"], observed_at),
+        "whatsapp": whatsapp_source_status(workspace, schedulers["whatsapp"], observed_at,
+            acquisition_scheduler=inspect_launchagent("com.openhouse.localgraph.whatsapp-acquire",
+                home=home_dir, launchctl=launchctl_reader) if
+                _load_json(workspace.config_path).get("imports", {}).get("whatsapp", {}).get("acquisition") else None),
     }
     finding_counts = {"error": 0, "warning": 0, "info": 0}
     for source in sources.values():

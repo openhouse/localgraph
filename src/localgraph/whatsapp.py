@@ -105,7 +105,7 @@ def _status_path(workspace: Workspace, record: dict) -> Path:
 def configure_chat(workspace: Workspace, *, account_key: str, chat_key: str, title: str,
                    kind: str, date_order: str, timezone_name: str, enabled: bool = True) -> dict:
     account_key, chat_key = _key(account_key), _key(chat_key)
-    if kind not in {"direct", "group"} or date_order not in {"mdy", "dmy"} or not title.strip():
+    if kind not in {"direct", "group", "unknown"} or date_order not in {"mdy", "dmy"} or not title.strip():
         raise ValueError("invalid WhatsApp chat configuration")
     ZoneInfo(timezone_name)
     with instagram_sync_lock(workspace) as acquired:
@@ -400,15 +400,26 @@ def run_whatsapp_sync(workspace: Workspace, *, now: datetime | None = None) -> d
         return {"status": "degraded" if any(r["status"] == "degraded" for r in results) else ("local-current" if results and all(r["status"] == "local-current" for r in results) else "export-required"), "chats": results}
 
 
-def source_status(workspace: Workspace, scheduler: dict, now: datetime) -> dict:
+def source_status(workspace: Workspace, scheduler: dict, now: datetime, acquisition_scheduler: dict | None = None) -> dict:
     from .status import _health, _scheduler_findings, _source_report
     by_account: dict[str, list[dict]] = {}
+    policy = _load(workspace.config_path).get("imports", {}).get("whatsapp", {}).get("acquisition", {})
+    if policy.get("accountKey"):
+        by_account[policy["accountKey"]] = []
     for record in chats(workspace):
         metadata_invalid = False
         try:
             sync = _load(_status_path(workspace, record))
         except (OSError, ValueError):
             sync, metadata_invalid = {}, True
+        for field in ("lastNativeExportAt", "lastSuccessfulSyncAt", "lastExportAt"):
+            if sync.get(field) is not None:
+                try:
+                    if _time(sync[field]) > now + timedelta(minutes=5):
+                        raise ValueError("future state timestamp")
+                except (ValueError, AttributeError, TypeError):
+                    sync.pop(field, None)
+                    metadata_invalid = True
         try:
             receipts = [_load(p) for p in (_root(workspace, record) / "receipts").glob("*.json")]
             if any(not re.fullmatch(r"[a-f0-9]{64}", str(r.get("sha256", ""))) or r.get("sourceKey") != record["sourceKey"] for r in receipts):
@@ -454,7 +465,9 @@ def source_status(workspace: Workspace, scheduler: dict, now: datetime) -> dict:
             finding("historical-completeness-not-established")
             try:
                 failure = _load(_root(workspace, record) / "acquisition-failure.json")
-            except (OSError, ValueError):
+                if failure:
+                    _time(failure["checkedAt"])
+            except (OSError, ValueError, KeyError, AttributeError, TypeError):
                 failure = {}
                 finding("whatsapp-metadata-invalid", "error")
             if failure and (not exported or _time(failure["checkedAt"]) > _time(exported)):
@@ -471,7 +484,24 @@ def source_status(workspace: Workspace, scheduler: dict, now: datetime) -> dict:
     accounts = []
     for key, records in by_account.items():
         findings = [f for r in records for f in r["findings"]]
-        accounts.append({"accountKey": key, "health": _health(findings), "findings": findings, "chats": records})
+        from .whatsapp_acquisition import population_status
+        try:
+            population = population_status(workspace, key, now=now,
+                current_keys={r["chatKey"] for r in records if r["lifecycle"]["current"]})
+        except (ValueError, OSError, KeyError, TypeError, AttributeError):
+            population = {"populationCovered": False, "historicalComplete": False, "status": "metadata-invalid"}
+        if not population.get("populationCovered"):
+            findings.append({"code": "whatsapp-population-incomplete", "severity": "warning"})
+        if population.get("lastError"):
+            findings.append({"code": "native-population-acquisition-failed", "severity": "error"})
+        accounts.append({"accountKey": key, "health": _health(findings), "findings": findings,
+                         "population": population, "chats": records})
+    if acquisition_scheduler is not None:
+        scheduler = {**scheduler, "acquisition": acquisition_scheduler}
+        for account in accounts:
+            extra = _scheduler_findings(acquisition_scheduler)
+            account["findings"].extend({**f, "code": "acquisition-" + f["code"]} for f in extra)
+            account["health"] = _health(account["findings"])
     return _source_report("whatsapp", scheduler, accounts, _scheduler_findings(scheduler) if accounts else [])
 
 
