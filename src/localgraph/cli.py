@@ -30,6 +30,8 @@ from .paths import Workspace
 from .render import render_views
 from .schema import connect, initialize_schema
 from .status import build_localgraph_status, record_lifecycle_stage
+from .twitter_accounts import configure_twitter_account, twitter_accounts_status
+from .twitter_sync import install_twitter_sync, run_twitter_sync
 from .views import view_kinds, view_path
 
 
@@ -126,6 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
     configure_account.add_argument("--adopt-legacy", action="store_true", help="Reuse the existing singleton cache, registry, mirror, and status paths.")
     configure_account.add_argument("--reuse-primary-drive", action="store_true", help="Reuse the primary account's Drive folder and read-only OAuth token.")
     configure_account.add_argument("--primary", action="store_true", help="Make this the primary Instagram account.")
+    configure_account.add_argument("--disabled", action="store_true", help="Register a pending account visibly without blocking synchronization of active accounts.")
 
     commands.add_parser(
         "instagram-accounts",
@@ -169,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
         "record-lifecycle",
         help="Record a provider-observed requested or preparing lifecycle event.",
     )
-    lifecycle.add_argument("--source", choices=("instagram", "facebook"), required=True)
+    lifecycle.add_argument("--source", choices=("instagram", "facebook", "twitter"), required=True)
     lifecycle.add_argument("--account", required=True)
     lifecycle.add_argument("--stage", choices=("requested", "preparing"), required=True)
     lifecycle.add_argument(
@@ -183,6 +186,25 @@ def build_parser() -> argparse.ArgumentParser:
         "facebook-accounts",
         help="List configured Facebook profiles and Pages with body-free sync health.",
     )
+    configure_twitter = commands.add_parser(
+        "configure-twitter-account",
+        help="Add or update one X/Twitter account in the private archive registry.",
+    )
+    configure_twitter.add_argument("--account", required=True, help="Stable X/Twitter username without @.")
+    configure_twitter.add_argument("--display-name", required=True)
+    configure_twitter.add_argument("--owner-kind", choices=("person", "organization"), required=True)
+    configure_twitter.add_argument("--self-name", action="append", default=[])
+    configure_twitter.add_argument("--disabled", action="store_true")
+    commands.add_parser("twitter-accounts", help="List configured X/Twitter accounts and body-free archive health.")
+    twitter_sync = commands.add_parser(
+        "twitter-sync",
+        help="Import account-scoped X/Twitter archives and refresh canonical views.",
+    )
+    twitter_sync.add_argument("--no-render", action="store_true")
+    install_twitter = commands.add_parser("install-twitter-sync", help="Install an hourly local X/Twitter archive check.")
+    install_twitter.add_argument("--interval-minutes", type=int, default=60)
+    install_twitter.add_argument("--label", default="com.openhouse.localgraph.twitter-sync")
+    install_twitter.add_argument("--dry-run", action="store_true")
     configure_facebook_baseline_parser = commands.add_parser(
         "configure-facebook-baseline",
         help="Record a verified one-time all-history Facebook Messages export for one account.",
@@ -339,6 +361,7 @@ def main(argv: list[str] | None = None) -> int:
                 adopt_legacy=args.adopt_legacy,
                 reuse_primary_drive=args.reuse_primary_drive,
                 primary=args.primary,
+                enabled=not args.disabled,
             )
         elif args.command == "instagram-accounts":
             summary = instagram_accounts_status(workspace)
@@ -379,6 +402,37 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "facebook-accounts":
             summary = facebook_accounts_status(workspace)
+        elif args.command == "configure-twitter-account":
+            summary = configure_twitter_account(
+                workspace,
+                account_key=args.account,
+                display_name=args.display_name,
+                owner_kind=args.owner_kind,
+                self_names=args.self_name,
+                enabled=not args.disabled,
+            )
+        elif args.command == "twitter-accounts":
+            summary = twitter_accounts_status(workspace)
+        elif args.command == "twitter-sync":
+            with instagram_sync_lock(workspace) as acquired:
+                if not acquired:
+                    summary = {
+                        "workspace": str(workspace.root),
+                        "twitterSync": {
+                            "schemaVersion": 1,
+                            "status": "skipped-concurrent",
+                            "lockPath": str(workspace.state_dir / "instagram-sync.lock"),
+                        },
+                    }
+                else:
+                    summary = run_twitter_sync(workspace, render=not args.no_render)
+        elif args.command == "install-twitter-sync":
+            summary = install_twitter_sync(
+                workspace,
+                interval_minutes=args.interval_minutes,
+                label=args.label,
+                dry_run=args.dry_run,
+            )
         elif args.command == "configure-facebook-baseline":
             summary = configure_facebook_baseline(
                 workspace,

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import contextlib
+import gc
 import io
 import json
 import plistlib
 import sqlite3
 import tempfile
 import unittest
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,6 +22,29 @@ NOW = datetime(2026, 8, 29, 22, 0, tzinfo=timezone.utc)
 
 
 class SourceHealthTests(unittest.TestCase):
+    def test_status_closes_read_only_database_connections(self) -> None:
+        """Catch source-health reads leaking SQLite handles after the report returns."""
+        from localgraph.status import build_localgraph_status
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            workspace = Workspace(base / "graph")
+            workspace.ensure_workspace(force=False)
+            with connect(workspace.database_path) as db:
+                initialize_schema(db)
+            gc.collect()
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", ResourceWarning)
+                build_localgraph_status(
+                    workspace,
+                    now=NOW,
+                    home=base / "home",
+                    launchctl=lambda _label: (113, "service not found"),
+                )
+                gc.collect()
+            leaked = [str(item.message) for item in caught if issubclass(item.category, ResourceWarning)]
+            self.assertEqual(leaked, [])
+
     def test_recorded_instagram_baseline_immediately_advances_status_acceptance(self) -> None:
         """Baseline acceptance cannot leave status stale until another network sync."""
         from localgraph.automation import configure_instagram_baseline
@@ -282,7 +307,7 @@ class SourceHealthTests(unittest.TestCase):
 
             self.assertEqual(code, 0)
             payload = json.loads(stdout)
-            self.assertEqual(set(payload["sources"]), {"instagram", "facebook", "imessage"})
+            self.assertEqual(set(payload["sources"]), {"instagram", "facebook", "twitter", "imessage"})
             self.assertEqual(payload["sources"]["instagram"]["accounts"][0]["accountKey"], "example")
             self.assertEqual(payload["sources"]["imessage"]["accounts"][0]["accountKey"], "local-macos-messages")
             self.assertNotIn("private body marker", stdout)

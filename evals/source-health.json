@@ -17,7 +17,11 @@
     },
     {
       "id": "test_status.SourceHealthTests.test_status_cli_lists_every_source_and_account_without_correspondence_bodies",
-      "criterion": "The unified status command includes Instagram, Facebook, and Apple Messages accounts while redacting correspondence bodies and raw failure text."
+      "criterion": "The unified status command includes Instagram, Facebook, X/Twitter, and Apple Messages accounts while redacting correspondence bodies and raw failure text."
+    },
+    {
+      "id": "test_status.SourceHealthTests.test_status_closes_read_only_database_connections",
+      "criterion": "Repeated source-health reads close their read-only SQLite connections without leaking database handles."
     },
     {
       "id": "test_facebook.FacebookTests.test_page_sync_requires_individual_export_capability_verification",

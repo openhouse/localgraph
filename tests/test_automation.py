@@ -26,6 +26,31 @@ from localgraph.paths import Workspace
 
 
 class AutomationTests(unittest.TestCase):
+    def test_pending_instagram_account_can_be_registered_without_stalling_active_accounts(self) -> None:
+        """Catch onboarding an account without an export blocking already operational accounts."""
+        from localgraph.instagram_accounts import instagram_accounts
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Workspace(Path(tmp) / "graph")
+            configure_test_accounts(workspace)
+            for key, owner, source in (
+                ("jamieburkart", "Jamie", workspace.sources_dir / "instagram-current"),
+                ("nycartc", "nycartc", workspace.sources_dir / "instagram-accounts/nycartc/current"),
+            ):
+                write_instagram_packet(source / f"instagram-{key}-2026-08-29-current", owner=owner, correspondent="Example Person", content="example")
+            try:
+                code, _ = run_cli(["--root", str(workspace.root), "configure-instagram-account", "--account", "examplepending", "--profile-name", "examplepending", "--owner-display-name", "Example Pending", "--owner-kind", "organization", "--disabled"])
+            except SystemExit as exc:
+                self.fail(f"paused account registration was rejected: {exc}")
+            self.assertEqual(code, 0)
+            self.assertEqual(len(instagram_accounts(workspace, enabled_only=False)), 3)
+            self.assertEqual(len(instagram_accounts(workspace)), 2)
+            code, stdout = run_cli(["--root", str(workspace.root), "instagram-sync", "--no-render"])
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["instagramSync"]["status"], "current")
+            self.assertEqual(payload["instagramSync"]["accountsReady"], 2)
+
     def test_multi_account_launchagent_reads_accounts_from_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Workspace(Path(tmp) / "graph")

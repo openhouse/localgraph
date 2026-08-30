@@ -134,6 +134,10 @@
     {
       "id": "test_cli.CliTests.test_init_accepts_repository_eval_and_script_entries",
       "criterion": "Repository-owned eval and script entries remain compatible with Localgraph workspace validation."
+    },
+    {
+      "id": "test_automation.AutomationTests.test_pending_instagram_account_can_be_registered_without_stalling_active_accounts",
+      "criterion": "A pending account remains visible while paused and does not stall synchronization of active accounts."
     }
   ]
 }

@@ -7,6 +7,7 @@ import re
 import sqlite3
 import subprocess
 from collections.abc import Callable
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -15,11 +16,13 @@ from urllib.parse import quote
 from .facebook_accounts import FacebookAccount, facebook_accounts
 from .instagram_accounts import InstagramAccount, instagram_accounts
 from .paths import Workspace
+from .twitter_accounts import TwitterAccount, twitter_accounts
 
 
 LAUNCHAGENT_LABELS = {
     "instagram": "com.openhouse.localgraph.instagram-sync",
     "facebook": "com.openhouse.localgraph.facebook-sync",
+    "twitter": "com.openhouse.localgraph.twitter-sync",
     "imessage": "com.openhouse.localgraph.imessage-sync",
 }
 LIFECYCLE_STAGES = (
@@ -58,6 +61,7 @@ def build_localgraph_status(
     sources = {
         "instagram": _instagram_source_status(workspace, schedulers["instagram"], observed_at),
         "facebook": _facebook_source_status(workspace, schedulers["facebook"], observed_at),
+        "twitter": _twitter_source_status(workspace, schedulers["twitter"], observed_at),
         "imessage": _imessage_source_status(workspace, schedulers["imessage"], observed_at),
     }
     finding_counts = {"error": 0, "warning": 0, "info": 0}
@@ -140,8 +144,8 @@ def record_lifecycle_stage(
 ) -> dict[str, object]:
     source_key = source.strip().lower()
     account_key = account.strip().lstrip("@").lower()
-    if source_key not in {"instagram", "facebook"}:
-        raise ValueError("provider lifecycle source must be instagram or facebook")
+    if source_key not in {"instagram", "facebook", "twitter"}:
+        raise ValueError("provider lifecycle source must be instagram, facebook, or twitter")
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", account_key):
         raise ValueError("lifecycle account key is invalid")
     if stage not in PROVIDER_RECORDED_STAGES:
@@ -371,6 +375,73 @@ def _imessage_source_status(
     return _source_report("imessage", scheduler, [account], _scheduler_findings(scheduler))
 
 
+def _twitter_source_status(
+    workspace: Workspace,
+    scheduler: dict[str, object],
+    now: datetime,
+) -> dict[str, object]:
+    reports = [
+        _twitter_account_status(workspace, account, scheduler=scheduler, now=now)
+        for account in twitter_accounts(workspace, enabled_only=False)
+    ]
+    return _source_report("twitter", scheduler, reports, _scheduler_findings(scheduler))
+
+
+def _twitter_account_status(
+    workspace: Workspace,
+    account: TwitterAccount,
+    *,
+    scheduler: dict[str, object],
+    now: datetime,
+) -> dict[str, object]:
+    sync = _load_json(account.sync_status_path) or {
+        "accountKey": account.account_key,
+        "status": "export-required",
+        "completedExports": 0,
+        "messageFiles": 0,
+        "historyCoverage": "archive-required",
+    }
+    authorization = {"status": "not-required", "accessTokenExpired": False}
+    import_count, thread_count = _canonical_counts(workspace, "twitter", account.account_key)
+    rendered = (workspace.views_dir / "twitter-accounts" / account.account_key / "index.md").is_file()
+    findings = _account_findings(
+        source="twitter",
+        sync=sync,
+        authorization=authorization,
+        scheduler=scheduler,
+        now=now,
+        interval_minutes=_scheduler_interval_minutes(scheduler),
+        capability=None,
+    )
+    lifecycle = _lifecycle(
+        workspace,
+        source="twitter",
+        account_key=account.account_key,
+        sync=sync,
+        import_count=import_count,
+        rendered=rendered,
+        findings=findings,
+    )
+    return {
+        "accountKey": account.account_key,
+        "displayName": account.display_name,
+        "provider": "x-twitter",
+        "enabled": account.enabled,
+        "health": _health(findings),
+        "syncStatus": str(sync.get("status") or "export-required"),
+        "lastSuccessfulSyncAt": sync.get("lastSuccessfulSyncAt"),
+        "completedExports": _integer(sync.get("completedExports")),
+        "messageFiles": _integer(sync.get("messageFiles")),
+        "imports": import_count,
+        "threads": thread_count,
+        "historyCoverage": str(sync.get("historyCoverage") or "archive-required"),
+        "authorization": authorization,
+        "providerCadence": "manual",
+        "lifecycle": lifecycle,
+        "findings": findings,
+    }
+
+
 def _source_report(
     source: str,
     scheduler: dict[str, object],
@@ -440,12 +511,13 @@ def _account_findings(
         if now - last_success > stale_after:
             findings.append({"code": "stale-sync", "severity": "error"})
     completed = _integer(sync.get("completedExports"))
-    if source in {"instagram", "facebook"}:
+    if source in {"instagram", "facebook", "twitter"}:
         if completed == 0:
             findings.append({"code": "missing-export", "severity": "warning"})
         if completed > 0 and _integer(sync.get("messageFiles")) == 0:
             findings.append({"code": "unexpected-empty-snapshot", "severity": "error"})
-        if str(sync.get("historyCoverage") or "baseline-required") != "complete-through-latest-export":
+        default_coverage = "archive-required" if source == "twitter" else "baseline-required"
+        if str(sync.get("historyCoverage") or default_coverage) != "complete-through-latest-export":
             findings.append({"code": "historical-completeness-not-established", "severity": "warning"})
     elif source == "imessage":
         if sync_status == "current" and (
@@ -576,7 +648,7 @@ def _canonical_counts(
         return 0, 0
     try:
         database_uri = f"file:{quote(workspace.database_path.as_posix(), safe='/')}?mode=ro&immutable=1"
-        with sqlite3.connect(database_uri, uri=True) as db:
+        with closing(sqlite3.connect(database_uri, uri=True)) as db:
             if account_key is None:
                 imports = db.execute(
                     "SELECT COUNT(*) FROM source_imports WHERE source_kind = ?",
@@ -588,12 +660,12 @@ def _canonical_counts(
                 ).fetchone()[0]
             else:
                 imports = db.execute(
-                    "SELECT COUNT(*) FROM source_imports WHERE source_kind = ? AND source_identifier LIKE ?",
-                    (source, f"{source}:{account_key}:%"),
+                    "SELECT COUNT(*) FROM source_imports WHERE source_kind = ? AND source_identifier GLOB ?",
+                    (source, f"{source}:{account_key}:*"),
                 ).fetchone()[0]
                 threads = db.execute(
-                    "SELECT COUNT(*) FROM threads WHERE source_kind = ? AND source_thread_key LIKE ?",
-                    (source, f"{account_key}:%"),
+                    "SELECT COUNT(*) FROM threads WHERE source_kind = ? AND source_thread_key GLOB ?",
+                    (source, f"{account_key}:*"),
                 ).fetchone()[0]
                 if allow_legacy and imports == 0 and threads == 0:
                     imports = db.execute(

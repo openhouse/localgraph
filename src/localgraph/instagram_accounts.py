@@ -77,6 +77,7 @@ def configure_instagram_account(
     adopt_legacy: bool = False,
     reuse_primary_drive: bool = False,
     primary: bool = False,
+    enabled: bool = True,
 ) -> dict[str, object]:
     workspace.ensure_workspace(force=False)
     key = normalize_account_key(account_key)
@@ -114,7 +115,7 @@ def configure_instagram_account(
         "ownerKind": owner_kind,
         "ownerIdentityKey": "person:self" if is_primary and owner_kind == "person" else f"{owner_kind}:instagram:{key}",
         "selfNames": _unique_names([profile, owner_display_name, *self_names]),
-        "enabled": True,
+        "enabled": enabled,
         **defaults,
     }
     if isinstance(accounts.get(key), dict):
