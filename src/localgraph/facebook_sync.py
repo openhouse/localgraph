@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .facebook import scan_facebook_source
 from .facebook_accounts import FacebookAccount, facebook_account, facebook_accounts
-from .drive import DriveAPIError, pull_configured_facebook_source
+from .drive import DriveAPIError, NoMatchingMetaExports, pull_configured_facebook_source
 from .ingest import SourceImportResult, import_facebook_source
 from .paths import Workspace
 from .render import render_views
@@ -81,14 +81,28 @@ def run_facebook_sync(workspace: Workspace, *, render: bool = True) -> dict[str,
         for account in accounts:
             drive_pull: dict[str, object] | None = None
             drive_error: str | None = None
+            no_matching_exports = False
             if account.sync_eligible and account.google_drive_folder_id:
                 try:
                     pulled = pull_configured_facebook_source(workspace, account_key=account.account_key)
                     if pulled is not None:
                         drive_pull = pulled.to_json()
+                except NoMatchingMetaExports as exc:
+                    no_matching_exports = True
+                    drive_error = str(exc)
                 except DriveAPIError as exc:
                     drive_error = str(exc)
             sources = _account_sources(account)
+            if no_matching_exports and not sources:
+                previous = _load_json(account.sync_status_path)
+                imported = db.execute(
+                    "SELECT 1 FROM source_imports WHERE source_kind = 'facebook' "
+                    "AND substr(source_identifier, 1, ?) = ? LIMIT 1",
+                    (len(f"facebook:{account.account_key}:"), f"facebook:{account.account_key}:"),
+                ).fetchone()
+                if not (previous.get("lastSuccessfulSyncAt") or previous.get("completedExports") or imported):
+                    drive_error = None
+                    drive_pull = {"status": "pending", "reason": "no-matching-export"}
             if not account.sync_eligible:
                 result = SourceImportResult("facebook", str(account.source_path), status="held")
                 result.warnings.append(
@@ -147,7 +161,7 @@ def run_facebook_sync(workspace: Workspace, *, render: bool = True) -> dict[str,
                     account,
                     [],
                     checked_at=checked_at,
-                    status="pending",
+                    status="degraded" if drive_error else "pending",
                     drive_error=drive_error,
                 )
             _write_json_private(account.sync_status_path, status)
@@ -182,6 +196,7 @@ def run_facebook_sync(workspace: Workspace, *, render: bool = True) -> dict[str,
         "accountsEligible": len(eligible),
         "accountsReady": sum(
             str(account_payload[account.account_key]["sync"]["status"]) in {"local-current", "current", "degraded"}  # type: ignore[index]
+            and int(account_payload[account.account_key]["sync"]["messageFiles"]) > 0  # type: ignore[index]
             for account in eligible
         ),
         "accounts": {
@@ -363,7 +378,7 @@ def _account_status(
         "syncEligible": account.sync_eligible,
         "status": status,
         "checkedAt": checked_at,
-        "lastSuccessfulSyncAt": checked_at if status in {"local-current", "degraded"} else previous.get("lastSuccessfulSyncAt"),
+        "lastSuccessfulSyncAt": checked_at if sources and status in {"local-current", "degraded"} else previous.get("lastSuccessfulSyncAt"),
         "messageFiles": message_files,
         "completedExports": len(set(exports)),
         "historyCoverage": "complete-through-latest-export" if baseline_present else "baseline-required",

@@ -87,6 +87,10 @@ class DriveAPIError(RuntimeError):
     """Raised when Google Drive auth or API access fails."""
 
 
+class NoMatchingMetaExports(DriveAPIError):
+    """Discovery succeeded, but no dated exports matched the account prefix."""
+
+
 def configure_google_drive_api(
     workspace: Workspace,
     *,
@@ -506,7 +510,7 @@ def _list_instagram_exports(
                     )
                 )
     if not candidates:
-        raise DriveAPIError(
+        raise NoMatchingMetaExports(
             "configured Google Drive container has no matching dated Meta exports for the configured account prefix"
         )
     return sorted(

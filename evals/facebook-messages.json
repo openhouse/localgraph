@@ -46,6 +46,18 @@
     {
       "id": "test_facebook.FacebookTests.test_shared_drive_discovery_error_is_source_neutral",
       "criterion": "The shared Meta Drive discovery path reports a source-neutral pending condition instead of mislabeling Facebook acquisition as Instagram."
+    },
+    {
+      "id": "test_facebook.FacebookTests.test_first_facebook_delivery_is_pending_without_a_sync_failure",
+      "criterion": "Successful empty Drive discovery before the first delivery remains pending with a missing-export warning, no false sync failure or success timestamp, and no historical completeness claim."
+    },
+    {
+      "id": "test_facebook.FacebookTests.test_first_facebook_delivery_does_not_hide_drive_failures",
+      "criterion": "Authorization and API failures still degrade an account awaiting its first export and cannot count that empty account as ready."
+    },
+    {
+      "id": "test_facebook.FacebookTests.test_missing_facebook_exports_after_import_remain_degraded",
+      "criterion": "Empty remote discovery after local custody or import evidence remains degraded, preserves canonical messages, and does not advance a missing snapshot's successful-sync timestamp."
     }
   ]
 }
