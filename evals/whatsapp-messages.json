@@ -84,6 +84,7 @@
     "test_whatsapp_refresh.WhatsAppRefreshTests.test_policy_change_during_export_cannot_be_custodied_or_reported_current",
     "test_whatsapp_refresh.WhatsAppRefreshTests.test_final_canonical_validation_overrides_an_earlier_queue_checkpoint",
     "test_whatsapp_refresh.WhatsAppRefreshTests.test_unified_status_reports_the_independent_discovery_scheduler",
-    "test_whatsapp_refresh.WhatsAppRefreshTests.test_delivery_rechecks_binding_inside_the_writer_lock"
+    "test_whatsapp_refresh.WhatsAppRefreshTests.test_delivery_rechecks_binding_inside_the_writer_lock",
+    "test_whatsapp_refresh.WhatsAppRefreshTests.test_refresh_cli_exit_code_distinguishes_pending_population_from_failed_export"
   ]
 }

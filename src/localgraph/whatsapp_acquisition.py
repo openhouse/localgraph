@@ -587,7 +587,7 @@ def run_acquisition(workspace: Workspace, *, downloads: Path | None = None, driv
             completed = set(accepted_keys + skipped_keys + recovered_keys) & current_keys
             result["refreshStatus"] = "current" if eligible and eligible <= completed else "pending"
             result["remainingChats"] = len(eligible - completed)
-            if any(r["status"] == "failed" for r in results):
+            if any(r["status"] == "failed" or r["chatKey"] not in current_keys for r in results):
                 result["refreshStatus"] = "degraded"
         if execution_candidate != candidate_hash():
             result.update({"status": "degraded", "error": "candidate-changed-during-run", "acceptedChatKeys": []})

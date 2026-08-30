@@ -1,6 +1,8 @@
 """Resumable acquisition contracts; provider observations and ZIPs are synthetic."""
 import json
 import inspect
+import contextlib
+import io
 import shutil
 import subprocess
 import plistlib
@@ -150,7 +152,7 @@ class WhatsAppRefreshTests(unittest.TestCase):
             return self.driver(operation, profile, *args)
         result = self.refresh(driver=tampered)
         self.assertEqual(result["acceptedChatKeys"], ["second"])
-        self.assertNotEqual(result["refreshStatus"], "current")
+        self.assertEqual(result["refreshStatus"], "degraded")
 
     def test_delivered_checkpoint_resumes_import_without_another_native_export(self):
         """Catch re-exporting an already custodied ZIP after interruption before import."""
@@ -294,6 +296,27 @@ class WhatsAppRefreshTests(unittest.TestCase):
         self.assertEqual(args.max_chats, 2)
         self.assertTrue(args.force)
         self.assertEqual(build_parser().parse_args(["whatsapp-discover"]).command, "whatsapp-discover")
+
+    def test_refresh_cli_exit_code_distinguishes_pending_population_from_failed_export(self):
+        """Catch a healthy bounded refresh being reported as a failed scheduled job."""
+        from localgraph.cli import main
+        output = io.StringIO()
+        with patch.object(acq, "native_driver", side_effect=self.driver), contextlib.redirect_stdout(output):
+            code = main(["--root", str(self.ws.root), "whatsapp-refresh", "--max-chats", "1",
+                         "--downloads", str(self.downloads)])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(output.getvalue())["refreshStatus"], "pending")
+        self.assertFalse(json.loads(output.getvalue())["population"]["populationCovered"])
+        def failed(operation, profile, *args):
+            if operation == "export":
+                raise ValueError("export-unavailable")
+            return self.driver(operation, profile, *args)
+        output = io.StringIO()
+        with patch.object(acq, "native_driver", side_effect=failed), contextlib.redirect_stdout(output):
+            code = main(["--root", str(self.ws.root), "whatsapp-refresh", "--max-chats", "1",
+                         "--downloads", str(self.downloads)])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(output.getvalue())["refreshStatus"], "degraded")
 
 
 if __name__ == "__main__":

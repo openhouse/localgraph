@@ -475,7 +475,9 @@ def main(argv: list[str] | None = None) -> int:
                 chat_keys=getattr(args, "chat", None), refresh_only=args.command == "whatsapp-refresh",
                 resume=args.command == "whatsapp-refresh" and not args.force, max_chats=getattr(args, "max_chats", None),
                 discovery_if_due=getattr(args, "if_due", False))
-            if summary["status"] == "degraded":
+            failed = (summary.get("refreshStatus") == "degraded" or bool(summary.get("error"))
+                      if args.command == "whatsapp-refresh" else summary["status"] == "degraded")
+            if failed:
                 print(json.dumps(summary, indent=2, sort_keys=True))
                 return 1
         elif args.command == "install-whatsapp-acquisition":
