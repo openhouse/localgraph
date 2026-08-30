@@ -18,7 +18,9 @@ from unittest import mock
 from localgraph.cli import main
 from localgraph.drive import (
     DRIVE_SCOPE_READONLY,
+    InstagramExportFolder,
     _authorization_url,
+    _completed_export_entry_is_valid,
     _is_unchanged,
     _list_instagram_exports,
     configure_google_drive_api,
@@ -56,6 +58,31 @@ def message_payload() -> bytes:
 
 
 class DrivePullTests(unittest.TestCase):
+    def test_previous_no_message_registry_entry_is_rechecked_for_supported_html(self) -> None:
+        """A newly supported provider format must not remain permanently suppressed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_root = Path(tmp) / "cache"
+            relative = Path("meta-html/instagram-nycartc-2026-08-29-baseline")
+            message = relative / "your_instagram_activity/messages/inbox/artist_123/message_1.html"
+            target = cache_root / message
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                '<h1>Example Artist</h1><div class="_a6-g"><h2 class="_a6-h">Example Artist</h2>'
+                '<div class="_a6-p">Hello</div><div class="_a6-o">Aug 29, 2026 3:45 PM</div></div>',
+                encoding="utf-8",
+            )
+            candidate = InstagramExportFolder(
+                folder_id="baseline-id",
+                name="instagram-nycartc-2026-08-29-baseline",
+                relative_path=relative,
+            )
+            entry = {
+                "status": "no-message-files",
+                "relativePath": relative.as_posix(),
+            }
+
+            self.assertFalse(_completed_export_entry_is_valid(cache_root, candidate, entry))
+
     def test_history_baseline_is_recorded_for_only_the_selected_account(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Workspace(Path(tmp) / "graph")

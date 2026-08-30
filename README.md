@@ -48,6 +48,7 @@ parts of the first scaffold family:
 python -m localgraph --root ~/Localgraph plan
 python -m localgraph --root ~/Localgraph init
 python -m localgraph --root ~/Localgraph doctor
+python -m localgraph --root ~/Localgraph status
 python -m localgraph --root ~/Localgraph scan
 python -m localgraph --root ~/Localgraph import --me "Jamie Burkart" --render
 python -m localgraph --root ~/Localgraph drive-pull
@@ -61,8 +62,12 @@ python -m localgraph --root ~/Localgraph view-name person "Alice Example" "insta
 ```
 
 `init` creates the private local workspace directories and a SQLite database.
+`status` is the unified body-free health and acceptance report for every source
+and account. It checks LaunchAgent load and exit state, freshness, Drive
+authorization, missing or empty custody, canonical import, rendering, and
+historical completeness without returning correspondence bodies or secrets.
 `scan` detects Instagram transfer exports under `sources/instagram` without
-returning message bodies. `import` reads Instagram JSON message exports and an
+returning message bodies. `import` reads Instagram JSON and HTML message exports and an
 iMessage `chat.db`, normalizes people, accounts, groups, threads, messages, and
 media references into SQLite, and can immediately `--render` filesystem views.
 `drive-pull` uses a private authenticated Google Drive API token to mirror a
@@ -112,8 +117,15 @@ for the complete custody, failure, and migration model.
 Facebook profiles and managed Pages use a sibling private registry. Personal
 profiles can reuse the same read-only Drive container authorization, while Page
 records remain provider-verification-required until the Page's own settings
-prove the available Messages export and recurrence controls. See
+prove the available Messages export and recurrence controls. Unverified Page
+packets are held without import; capability evidence is recorded for one Page
+at a time before it becomes sync-eligible. See
 [Facebook profile and managed Page messages](docs/facebook-messages.md).
+
+The common acceptance lifecycle is `configured → requested → preparing →
+delivered → imported → rendered → current / complete`. Current freshness and
+historical completeness remain separate. See [Source health and
+acceptance](docs/source-health-and-acceptance.md).
 
 Default private import locations:
 
@@ -203,9 +215,11 @@ private OAuth credential before subsequent provider requests. Drive metadata
 for sibling export and message folders is listed with bounded concurrency so
 large, mostly empty Meta directory skeletons do not serialize thousands of
 network round trips; file writes and canonical imports remain single-writer.
-Instagram packets that contain no message files are recorded as such and
-skipped on later runs; they do not invalidate or repeatedly delay the completed
-message packet chain.
+Instagram packets that contain no supported JSON or HTML message files are
+recorded as such and skipped on later runs; they do not invalidate or repeatedly
+delay the completed message packet chain. When support for a provider format is
+added, previously skipped cached packets are re-evaluated and can advance from
+delivered to imported without a false completeness claim.
 
 Freshness and historical completeness are separate. Until a one-time
 all-available-information export has completed, sync status reports
@@ -336,7 +350,13 @@ generated orientation, navigation, provenance, and transcript-link material.
 
 ## Message Evals and Hill Climb
 
-The deterministic Instagram, Facebook, and Apple Messages suites cover the offline PKCE and read-only OAuth
+WhatsApp supports explicitly bound native chat exports, cumulative private
+ingestion, stable transcript views, and separate acquisition/import health.
+See [Maintained WhatsApp exports](docs/whatsapp-messages.md) for the native
+acquisition protocol, hourly importer, daily Codex task, and coverage limits.
+`make hill-climb` includes the synthetic WhatsApp acceptance and failure suite.
+
+The deterministic source-health, Instagram, Facebook, and Apple Messages suites cover the offline PKCE and read-only OAuth
 contract, bounded cumulative-export selection, explicit baseline completeness,
 atomic completed-mirror publication, cumulative source replacement, stale
 generated-view reconciliation, last-known-good fallback, hourly scheduling,
@@ -344,7 +364,8 @@ authenticated acquisition precedence, overlapping-export deduplication,
 single-writer synchronization, account-scoped packet selection and state,
 atomic multi-account rebuilds, person/organization owner separation,
 account-specific baseline claims, canonical import and rendering, and repository
-workspace compatibility. The Facebook suite additionally verifies profile/Page
+workspace compatibility. Instagram acceptance also covers Meta HTML message
+pages and re-evaluation of packets that predate support for that format. The Facebook suite additionally verifies profile/Page
 identity separation, body-free registry status, independent pending-account
 semantics, Messages-only Drive scope, privacy exclusions, and hourly
 private-registry scheduling. The Apple Messages suite verifies WAL-consistent

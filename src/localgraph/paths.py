@@ -11,6 +11,7 @@ VIEW_DIRECTORY_NAMES = (
     "threads",
     "instagram-accounts",
     "facebook-accounts",
+    "twitter-accounts",
     "projects",
     "tags",
     "_system",
@@ -77,6 +78,10 @@ class Workspace:
         return self.sources_dir / "facebook"
 
     @property
+    def twitter_source_dir(self) -> Path:
+        return self.sources_dir / "twitter"
+
+    @property
     def imessage_source_dir(self) -> Path:
         return self.sources_dir / "imessage"
 
@@ -128,6 +133,7 @@ class Workspace:
             directory.mkdir(parents=True, exist_ok=True)
         self.instagram_source_dir.mkdir(parents=True, exist_ok=True)
         self.facebook_source_dir.mkdir(parents=True, exist_ok=True)
+        self.twitter_source_dir.mkdir(parents=True, exist_ok=True)
         self.imessage_source_dir.mkdir(parents=True, exist_ok=True)
         self._write_config(force=force)
         self._write_private_marker()
@@ -168,6 +174,10 @@ class Workspace:
                 },
                 "facebook": {
                     "localPath": "sources/facebook",
+                    "accounts": {},
+                },
+                "twitter": {
+                    "localPath": "sources/twitter",
                     "accounts": {},
                 },
                 "imessage": {

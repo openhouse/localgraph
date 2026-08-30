@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "suite": "twitter-messages",
+  "description": "Account-scoped X/Twitter archive import, identity custody, body-free health, and honest archive coverage.",
+  "cases": [
+    {"id": "test_twitter.TwitterTests.test_configured_account_is_account_scoped_and_reported_as_export_required", "criterion": "A registered account has independent private paths and appears as export-required in unified status."},
+    {"id": "test_twitter.TwitterTests.test_sync_imports_direct_messages_from_account_archive_without_echoing_bodies", "criterion": "Direct Messages import from a downloaded account ZIP without exposing bodies in operational output."},
+    {"id": "test_twitter.TwitterTests.test_archive_identity_must_match_the_registered_account", "criterion": "An archive from a different username is rejected before any message import."},
+    {"id": "test_twitter.TwitterTests.test_group_direct_messages_are_imported_and_counted", "criterion": "Separate group-DM files are imported and counted rather than silently omitted."},
+    {"id": "test_twitter.TwitterTests.test_render_creates_account_scoped_twitter_view", "criterion": "Imported threads have an account-specific filesystem view without an unsupported full-history claim."},
+    {"id": "test_twitter.TwitterTests.test_installed_hourly_job_executes_the_account_scoped_sync", "criterion": "The hourly run-at-login job executes the installed private runtime and writes a source receipt."},
+    {"id": "test_twitter.TwitterTests.test_invalid_archive_preserves_last_good_account_and_other_accounts_advance", "criterion": "Invalid archives preserve last-known-good custody and do not stop independent accounts."},
+    {"id": "test_twitter.TwitterTests.test_overlapping_archives_report_unique_canonical_message_counts", "criterion": "Overlapping cumulative archives do not inflate canonical message or thread counts."},
+    {"id": "test_twitter.TwitterTests.test_twitter_requested_stage_does_not_imply_archive_delivery", "criterion": "Provider request evidence does not imply delivery, import, or historical completeness."},
+    {"id": "test_twitter.TwitterTests.test_missing_archive_username_is_not_assumed_to_be_the_registered_account", "criterion": "Missing provider identity cannot borrow the configured handle to bypass archive validation."},
+    {"id": "test_twitter.TwitterTests.test_underscore_account_keys_do_not_match_or_erase_other_accounts", "criterion": "Account keys are literal identifiers, not SQL wildcard patterns."}
+  ]
+}

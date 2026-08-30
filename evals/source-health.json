@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "suite": "source-health",
+  "description": "Deterministic health, scheduler, authorization, lifecycle, and acceptance gates across every Localgraph source and account.",
+  "cases": [
+    {
+      "id": "test_status.SourceHealthTests.test_status_detects_failed_scheduler_expired_auth_stale_sync_missing_export_and_empty_snapshot",
+      "criterion": "One body-free report independently detects a failed LaunchAgent, stale success receipt, expired authorization, missing export, and unexpectedly empty completed packet."
+    },
+    {
+      "id": "test_status.SourceHealthTests.test_status_lifecycle_keeps_subsequent_packets_current_but_incomplete_without_baseline",
+      "criterion": "Requested and preparing provider evidence joins delivered, imported, rendered, and current local evidence while subsequent packets remain historically incomplete without an account-specific baseline."
+    },
+    {
+      "id": "test_status.SourceHealthTests.test_recorded_instagram_baseline_immediately_advances_status_acceptance",
+      "criterion": "Recording an exact locally completed baseline immediately advances the unified account status instead of leaving a stale baseline-required receipt until a later network sync."
+    },
+    {
+      "id": "test_status.SourceHealthTests.test_status_cli_lists_every_source_and_account_without_correspondence_bodies",
+      "criterion": "The unified status command includes Instagram, Facebook, X/Twitter, and Apple Messages accounts while redacting correspondence bodies and raw failure text."
+    },
+    {
+      "id": "test_status.SourceHealthTests.test_status_closes_read_only_database_connections",
+      "criterion": "Repeated source-health reads close their read-only SQLite connections without leaking database handles."
+    },
+    {
+      "id": "test_facebook.FacebookTests.test_page_sync_requires_individual_export_capability_verification",
+      "criterion": "A Facebook Page packet cannot be imported or accepted as a baseline until that exact Page has a recorded supported export capability observation."
+    }
+  ]
+}

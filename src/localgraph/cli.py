@@ -14,7 +14,12 @@ from .automation import (
     run_daily_import,
 )
 from .drive import DriveAPIError, authenticate_google_drive, configure_google_drive_api, pull_google_drive_folder
-from .facebook_accounts import configure_facebook_account, exclude_facebook_account, facebook_accounts_status
+from .facebook_accounts import (
+    configure_facebook_account,
+    exclude_facebook_account,
+    facebook_accounts_status,
+    verify_facebook_export_capability,
+)
 from .facebook import scan_facebook_source
 from .facebook_sync import configure_facebook_baseline, install_facebook_sync, run_facebook_sync
 from .ingest import import_workspace_sources
@@ -24,7 +29,12 @@ from .imessage_sync import imessage_status, install_imessage_sync, run_imessage_
 from .paths import Workspace
 from .render import render_views
 from .schema import connect, initialize_schema
+from .status import build_localgraph_status, record_lifecycle_stage
+from .twitter_accounts import configure_twitter_account, twitter_accounts_status
+from .twitter_sync import install_twitter_sync, run_twitter_sync
 from .views import view_kinds, view_path
+from .whatsapp import configure_chat, install_whatsapp_sync, record_export, record_acquisition_failure, run_whatsapp_sync
+from .whatsapp_acquisition import configure_acquisition, run_acquisition, install_acquisition
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -40,12 +50,61 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands = parser.add_subparsers(dest="command", required=True)
 
+    whatsapp = commands.add_parser("configure-whatsapp-chat", help="Explicitly bind one approved private WhatsApp chat.")
+    whatsapp.add_argument("--account", required=True)
+    whatsapp.add_argument("--chat", required=True)
+    whatsapp.add_argument("--title", required=True)
+    whatsapp.add_argument("--kind", choices=("direct", "group"), required=True)
+    whatsapp.add_argument("--date-order", choices=("mdy", "dmy"), required=True)
+    whatsapp.add_argument("--timezone", required=True)
+    whatsapp.add_argument("--disabled", action="store_true")
+    delivery = commands.add_parser("whatsapp-deliver", help="Validate, copy and bind a completed native or historical chat export.")
+    delivery.add_argument("--account", required=True)
+    delivery.add_argument("--chat", required=True)
+    delivery.add_argument("--archive", type=Path, required=True)
+    delivery.add_argument("--observed-title", required=True)
+    delivery.add_argument("--exported-at", required=True)
+    delivery.add_argument("--origin", choices=("mac-native", "phone-export", "historical-local"), required=True)
+    delivery.add_argument("--media-requested", action="store_true")
+    failed = commands.add_parser("whatsapp-acquisition-failed", help="Record a body-free native acquisition failure.")
+    failed.add_argument("--account", required=True)
+    failed.add_argument("--chat", required=True)
+    failed.add_argument("--reason", required=True, choices=("session-unavailable", "app-disconnected", "export-control-changed", "export-failed", "identity-unverified"))
+    commands.add_parser("whatsapp-sync", help="Import accepted WhatsApp archives and atomically refresh chat views.")
+    wa_install = commands.add_parser("install-whatsapp-sync", help="Install the local WhatsApp import watcher; native exports are separate.")
+    wa_install.add_argument("--interval-minutes", type=int, default=60)
+    wa_install.add_argument("--dry-run", action="store_true")
+    wa_native = commands.add_parser("configure-whatsapp-acquisition", help="Authorize native AppleScript discovery and acquisition for all Mac chats.")
+    wa_native.add_argument("--account", required=True)
+    wa_native.add_argument("--expected-profile", required=True, help="Verified reserved WhatsApp username.")
+    wa_native.add_argument("--date-order", choices=("mdy", "dmy"), required=True)
+    wa_native.add_argument("--timezone", required=True)
+    wa_native.add_argument("--all-chats", action="store_true", required=True)
+    wa_acquire = commands.add_parser("whatsapp-acquire", help="Discover and export native chats, validate delivery, import and render.")
+    wa_acquire.add_argument("--inventory-only", action="store_true")
+    wa_acquire.add_argument("--chat", action="append", help="Restrict acquisition to a local key for acceptance; inventory still covers all chats.")
+    wa_acquire.add_argument("--downloads", type=Path)
+    wa_discover = commands.add_parser("whatsapp-discover", help="Update population evidence without exporting any chat.")
+    wa_discover.add_argument("--if-due", action="store_true", help="Skip a fresh successful discovery of this candidate and policy.")
+    wa_refresh = commands.add_parser("whatsapp-refresh", help="Resume bounded per-chat refreshes independently of discovery.")
+    wa_refresh.add_argument("--chat", action="append")
+    wa_refresh.add_argument("--max-chats", type=int, default=10)
+    wa_refresh.add_argument("--force", action="store_true", help="Refresh even recently accepted chats for live acceptance.")
+    wa_refresh.add_argument("--downloads", type=Path)
+    wa_acq_install = commands.add_parser("install-whatsapp-acquisition", help="Install the verified AppleScript acquisition LaunchAgent.")
+    wa_acq_install.add_argument("--hour", type=int, default=9)
+    wa_acq_install.add_argument("--dry-run", action="store_true")
+
     commands.add_parser("plan", help="Print the planned private root and view layout.")
 
     init = commands.add_parser("init", help="Create workspace directories and SQLite schema.")
     init.add_argument("--force", action="store_true", help="Allow initialization in a non-empty directory.")
 
     commands.add_parser("doctor", help="Check workspace directories and database schema.")
+    commands.add_parser(
+        "status",
+        help="Report body-free health, scheduler, authorization, and lifecycle state for every source and account.",
+    )
 
     scan = commands.add_parser("scan", help="Detect Instagram transfer exports without reading message bodies.")
     scan.add_argument("--source", help="Instagram source directory. Defaults to sources/instagram.")
@@ -116,6 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
     configure_account.add_argument("--adopt-legacy", action="store_true", help="Reuse the existing singleton cache, registry, mirror, and status paths.")
     configure_account.add_argument("--reuse-primary-drive", action="store_true", help="Reuse the primary account's Drive folder and read-only OAuth token.")
     configure_account.add_argument("--primary", action="store_true", help="Make this the primary Instagram account.")
+    configure_account.add_argument("--disabled", action="store_true", help="Register a pending account visibly without blocking synchronization of active accounts.")
 
     commands.add_parser(
         "instagram-accounts",
@@ -146,10 +206,52 @@ def build_parser() -> argparse.ArgumentParser:
     exclude_facebook.add_argument("--account", required=True, help="Stable local account key.")
     exclude_facebook.add_argument("--reason", default="privacy-exclusion", help="Private exclusion reason code.")
 
+    verify_facebook = commands.add_parser(
+        "verify-facebook-export-capability",
+        help="Record an individual Facebook Page export capability observation before onboarding.",
+    )
+    verify_facebook.add_argument("--account", required=True)
+    verify_facebook.add_argument("--capability", choices=("supported", "unsupported"), required=True)
+    verify_facebook.add_argument("--provider-surface", required=True)
+    verify_facebook.add_argument("--observed-at", required=True, help="Timezone-qualified ISO 8601 observation time.")
+
+    lifecycle = commands.add_parser(
+        "record-lifecycle",
+        help="Record a provider-observed requested or preparing lifecycle event.",
+    )
+    lifecycle.add_argument("--source", choices=("instagram", "facebook", "twitter"), required=True)
+    lifecycle.add_argument("--account", required=True)
+    lifecycle.add_argument("--stage", choices=("requested", "preparing"), required=True)
+    lifecycle.add_argument(
+        "--evidence",
+        choices=("provider-activity-record", "operator-observed-provider-ui"),
+        required=True,
+    )
+    lifecycle.add_argument("--observed-at", required=True, help="Timezone-qualified ISO 8601 observation time.")
+
     commands.add_parser(
         "facebook-accounts",
         help="List configured Facebook profiles and Pages with body-free sync health.",
     )
+    configure_twitter = commands.add_parser(
+        "configure-twitter-account",
+        help="Add or update one X/Twitter account in the private archive registry.",
+    )
+    configure_twitter.add_argument("--account", required=True, help="Stable X/Twitter username without @.")
+    configure_twitter.add_argument("--display-name", required=True)
+    configure_twitter.add_argument("--owner-kind", choices=("person", "organization"), required=True)
+    configure_twitter.add_argument("--self-name", action="append", default=[])
+    configure_twitter.add_argument("--disabled", action="store_true")
+    commands.add_parser("twitter-accounts", help="List configured X/Twitter accounts and body-free archive health.")
+    twitter_sync = commands.add_parser(
+        "twitter-sync",
+        help="Import account-scoped X/Twitter archives and refresh canonical views.",
+    )
+    twitter_sync.add_argument("--no-render", action="store_true")
+    install_twitter = commands.add_parser("install-twitter-sync", help="Install an hourly local X/Twitter archive check.")
+    install_twitter.add_argument("--interval-minutes", type=int, default=60)
+    install_twitter.add_argument("--label", default="com.openhouse.localgraph.twitter-sync")
+    install_twitter.add_argument("--dry-run", action="store_true")
     configure_facebook_baseline_parser = commands.add_parser(
         "configure-facebook-baseline",
         help="Record a verified one-time all-history Facebook Messages export for one account.",
@@ -254,6 +356,8 @@ def main(argv: list[str] | None = None) -> int:
             summary = command_init(workspace, force=args.force)
         elif args.command == "doctor":
             summary = command_doctor(workspace)
+        elif args.command == "status":
+            summary = build_localgraph_status(workspace)
         elif args.command == "scan":
             summary = command_scan(workspace, source=args.source)
         elif args.command == "facebook-scan":
@@ -304,6 +408,7 @@ def main(argv: list[str] | None = None) -> int:
                 adopt_legacy=args.adopt_legacy,
                 reuse_primary_drive=args.reuse_primary_drive,
                 primary=args.primary,
+                enabled=not args.disabled,
             )
         elif args.command == "instagram-accounts":
             summary = instagram_accounts_status(workspace)
@@ -325,8 +430,89 @@ def main(argv: list[str] | None = None) -> int:
                 account_key=args.account,
                 reason=args.reason,
             )
+        elif args.command == "verify-facebook-export-capability":
+            summary = verify_facebook_export_capability(
+                workspace,
+                account_key=args.account,
+                capability=args.capability,
+                provider_surface=args.provider_surface,
+                observed_at=args.observed_at,
+            )
+        elif args.command == "record-lifecycle":
+            summary = record_lifecycle_stage(
+                workspace,
+                source=args.source,
+                account=args.account,
+                stage=args.stage,
+                observed_at=args.observed_at,
+                evidence=args.evidence,
+            )
         elif args.command == "facebook-accounts":
             summary = facebook_accounts_status(workspace)
+        elif args.command == "configure-whatsapp-chat":
+            summary = configure_chat(workspace, account_key=args.account, chat_key=args.chat, title=args.title,
+                                     kind=args.kind, date_order=args.date_order, timezone_name=args.timezone,
+                                     enabled=not args.disabled)
+        elif args.command == "whatsapp-deliver":
+            summary = record_export(workspace, account_key=args.account, chat_key=args.chat, archive=args.archive,
+                                    observed_title=args.observed_title, exported_at=args.exported_at,
+                                    media_requested=args.media_requested, origin=args.origin)
+        elif args.command == "whatsapp-acquisition-failed":
+            summary = record_acquisition_failure(workspace, account_key=args.account, chat_key=args.chat, reason=args.reason)
+        elif args.command == "whatsapp-sync":
+            summary = run_whatsapp_sync(workspace)
+            if summary["status"] == "degraded":
+                print(json.dumps(summary, indent=2, sort_keys=True))
+                return 1
+        elif args.command == "install-whatsapp-sync":
+            summary = install_whatsapp_sync(workspace, interval_minutes=args.interval_minutes, dry_run=args.dry_run)
+        elif args.command == "configure-whatsapp-acquisition":
+            summary = configure_acquisition(workspace, account=args.account, expected_profile=args.expected_profile,
+                                            date_order=args.date_order, timezone_name=args.timezone)
+        elif args.command in {"whatsapp-acquire", "whatsapp-discover", "whatsapp-refresh"}:
+            summary = run_acquisition(workspace, downloads=getattr(args, "downloads", None),
+                inventory_only=args.command == "whatsapp-discover" or getattr(args, "inventory_only", False),
+                chat_keys=getattr(args, "chat", None), refresh_only=args.command == "whatsapp-refresh",
+                resume=args.command == "whatsapp-refresh" and not args.force, max_chats=getattr(args, "max_chats", None),
+                discovery_if_due=getattr(args, "if_due", False))
+            failed = (summary.get("refreshStatus") == "degraded" or bool(summary.get("error"))
+                      if args.command == "whatsapp-refresh" else summary["status"] == "degraded")
+            if failed:
+                print(json.dumps(summary, indent=2, sort_keys=True))
+                return 1
+        elif args.command == "install-whatsapp-acquisition":
+            summary = install_acquisition(workspace, hour=args.hour, dry_run=args.dry_run)
+        elif args.command == "configure-twitter-account":
+            summary = configure_twitter_account(
+                workspace,
+                account_key=args.account,
+                display_name=args.display_name,
+                owner_kind=args.owner_kind,
+                self_names=args.self_name,
+                enabled=not args.disabled,
+            )
+        elif args.command == "twitter-accounts":
+            summary = twitter_accounts_status(workspace)
+        elif args.command == "twitter-sync":
+            with instagram_sync_lock(workspace) as acquired:
+                if not acquired:
+                    summary = {
+                        "workspace": str(workspace.root),
+                        "twitterSync": {
+                            "schemaVersion": 1,
+                            "status": "skipped-concurrent",
+                            "lockPath": str(workspace.state_dir / "instagram-sync.lock"),
+                        },
+                    }
+                else:
+                    summary = run_twitter_sync(workspace, render=not args.no_render)
+        elif args.command == "install-twitter-sync":
+            summary = install_twitter_sync(
+                workspace,
+                interval_minutes=args.interval_minutes,
+                label=args.label,
+                dry_run=args.dry_run,
+            )
         elif args.command == "configure-facebook-baseline":
             summary = configure_facebook_baseline(
                 workspace,

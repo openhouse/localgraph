@@ -4,6 +4,10 @@
   "description": "Deterministic custody, identity, acquisition, and freshness gates for private Facebook profile and managed Page messages.",
   "cases": [
     {
+      "id": "test_facebook.FacebookTests.test_page_sync_requires_individual_export_capability_verification",
+      "criterion": "Each managed Page remains in a verification-required hold and cannot import or establish a baseline until its own provider export capability is recorded as supported."
+    },
+    {
       "id": "test_facebook.FacebookTests.test_privacy_exclusion_removes_account_and_prevents_reconfiguration_or_import",
       "criterion": "A privacy-excluded former-member profile is removed from active synchronization, cannot be re-enrolled, and cannot import even a packet left under its former private path."
     },
@@ -37,11 +41,23 @@
     },
     {
       "id": "test_facebook.FacebookTests.test_facebook_history_requires_account_specific_completed_baseline",
-      "criterion": "Fresh incremental Facebook packets cannot be labeled full history until that exact account has a materialized, explicitly recorded all-time baseline."
+      "criterion": "Fresh incremental Facebook packets cannot be labeled full history until that exact account has a materialized, explicitly recorded all-time baseline; acceptance updates its private receipt immediately."
     },
     {
       "id": "test_facebook.FacebookTests.test_shared_drive_discovery_error_is_source_neutral",
       "criterion": "The shared Meta Drive discovery path reports a source-neutral pending condition instead of mislabeling Facebook acquisition as Instagram."
+    },
+    {
+      "id": "test_facebook.FacebookTests.test_first_facebook_delivery_is_pending_without_a_sync_failure",
+      "criterion": "Successful empty Drive discovery before the first delivery remains pending with a missing-export warning, no false sync failure or success timestamp, and no historical completeness claim."
+    },
+    {
+      "id": "test_facebook.FacebookTests.test_first_facebook_delivery_does_not_hide_drive_failures",
+      "criterion": "Authorization and API failures still degrade an account awaiting its first export and cannot count that empty account as ready."
+    },
+    {
+      "id": "test_facebook.FacebookTests.test_missing_facebook_exports_after_import_remain_degraded",
+      "criterion": "Empty remote discovery after local custody or import evidence remains degraded, preserves canonical messages, and does not advance a missing snapshot's successful-sync timestamp."
     }
   ]
 }

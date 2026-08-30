@@ -87,6 +87,10 @@ class DriveAPIError(RuntimeError):
     """Raised when Google Drive auth or API access fails."""
 
 
+class NoMatchingMetaExports(DriveAPIError):
+    """Discovery succeeded, but no dated exports matched the account prefix."""
+
+
 def configure_google_drive_api(
     workspace: Workspace,
     *,
@@ -506,7 +510,7 @@ def _list_instagram_exports(
                     )
                 )
     if not candidates:
-        raise DriveAPIError(
+        raise NoMatchingMetaExports(
             "configured Google Drive container has no matching dated Meta exports for the configured account prefix"
         )
     return sorted(
@@ -539,8 +543,6 @@ def completed_instagram_export_paths(workspace: Workspace, *, account_key: str |
     for entry in entries.values():
         if not isinstance(entry, dict):
             continue
-        if entry.get("status") == "no-message-files":
-            continue
         relative = entry.get("relativePath")
         if not isinstance(relative, str):
             continue
@@ -564,7 +566,8 @@ def _completed_export_entry_is_valid(
     if entry.get("relativePath") != candidate.relative_path.as_posix():
         return False
     if entry.get("status") == "no-message-files":
-        return True
+        export = cache_root / candidate.relative_path
+        return int(scan_instagram_source(export)["totalMessageFiles"]) <= 0
     export = cache_root / candidate.relative_path
     return int(scan_instagram_source(export)["totalMessageFiles"]) > 0
 

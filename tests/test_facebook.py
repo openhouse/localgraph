@@ -14,6 +14,71 @@ from localgraph.cli import main
 
 
 class FacebookTests(unittest.TestCase):
+    def test_page_sync_requires_individual_export_capability_verification(self) -> None:
+        """Catch a discovered Page being onboarded before its own export surface is verified."""
+        from localgraph.facebook_sync import configure_facebook_baseline
+        from localgraph.paths import Workspace
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "graph"
+            configure_facebook_fixture(root, "example-page", "Example Page", "page", verify_page=False)
+            write_facebook_packet(
+                root / "sources/facebook-accounts/example-page/incoming/facebook-example-page-2026-08-29-export",
+                owner="Example Page",
+                content="must stay unimported until verified",
+            )
+
+            code, stdout = run_cli(["--root", str(root), "facebook-sync", "--no-render"])
+
+            self.assertEqual(code, 0)
+            before = json.loads(stdout)
+            self.assertEqual(before["facebookAccounts"]["example-page"]["sync"]["status"], "verification-required")
+            self.assertEqual(before["facebookSync"]["accountsEligible"], 0)
+            self.assertEqual(
+                before["facebookAccounts"]["example-page"]["account"]["exportCapability"]["providerSurface"],
+                "facebook-page-settings",
+            )
+            with self.assertRaisesRegex(ValueError, "export capability"):
+                configure_facebook_baseline(
+                    Workspace(root),
+                    account_key="example-page",
+                    export_name="facebook-example-page-2026-08-29-export",
+                )
+            with contextlib.closing(sqlite3.connect(root / "state/localgraph.sqlite")) as db:
+                self.assertEqual(
+                    db.execute(
+                        "SELECT COUNT(*) FROM messages JOIN threads ON threads.id = messages.thread_id "
+                        "WHERE threads.source_kind = 'facebook'"
+                    ).fetchone()[0],
+                    0,
+                )
+
+            code, stdout = run_cli(
+                [
+                    "--root",
+                    str(root),
+                    "verify-facebook-export-capability",
+                    "--account",
+                    "example-page",
+                    "--capability",
+                    "supported",
+                    "--provider-surface",
+                    "facebook-page-settings",
+                    "--observed-at",
+                    "2026-08-29T22:00:00Z",
+                ]
+            )
+            self.assertEqual(code, 0)
+            verified = json.loads(stdout)
+            self.assertEqual(verified["exportCapability"]["status"], "verified-supported")
+            code, stdout = run_cli(["--root", str(root), "facebook-sync", "--no-render"])
+
+            self.assertEqual(code, 0)
+            after = json.loads(stdout)
+            self.assertEqual(after["facebookAccounts"]["example-page"]["sync"]["status"], "local-current")
+            self.assertEqual(after["facebookSync"]["accountsEligible"], 1)
+            self.assertEqual(after["result"]["totals"]["messages"], 1)
+
     def test_privacy_exclusion_removes_account_and_prevents_reconfiguration_or_import(self) -> None:
         """Catch a former member's personal profile being re-enrolled or imported after exclusion."""
         import localgraph.facebook_accounts as accounts_module
@@ -469,6 +534,11 @@ class FacebookTests(unittest.TestCase):
 
             self.assertEqual(code, 0)
             self.assertEqual(json.loads(stdout)["historyCoverage"], "complete-through-latest-export")
+            receipt = json.loads(
+                (root / "state/facebook-accounts/example-person/sync-status.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(receipt["historyCoverage"], "complete-through-latest-export")
+            self.assertEqual(receipt["baselineExportName"], export_name)
             code, stdout = run_cli(["--root", str(root), "facebook-sync", "--no-render"])
             self.assertEqual(code, 0)
             self.assertEqual(
@@ -491,6 +561,106 @@ class FacebookTests(unittest.TestCase):
         self.assertIn("Meta exports", str(raised.exception))
         self.assertNotIn("instagram", str(raised.exception).lower())
 
+    def test_first_facebook_delivery_is_pending_without_a_sync_failure(self) -> None:
+        """Catch successful empty discovery being reported as broken authorization or sync."""
+        from localgraph.paths import Workspace
+        from localgraph.status import build_localgraph_status, record_lifecycle_stage
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "graph"
+            configure_facebook_drive_fixture(root)
+            record_lifecycle_stage(
+                Workspace(root), source="facebook", account="example-person",
+                stage="preparing", observed_at="2026-08-29T22:00:00Z",
+                evidence="provider-activity-record",
+            )
+            with mock.patch("localgraph.drive._list_drive_children", return_value=[]):
+                code, stdout = run_cli(["--root", str(root), "facebook-sync", "--no-render"])
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            account = payload["facebookAccounts"]["example-person"]
+            self.assertEqual(account["sync"]["status"], "pending")
+            self.assertIsNone(account["sync"]["lastError"])
+            self.assertIsNone(account["sync"]["lastSuccessfulSyncAt"])
+            self.assertEqual(account["googleDrivePull"]["status"], "pending")
+            self.assertEqual(account["googleDrivePull"]["reason"], "no-matching-export")
+            self.assertEqual(payload["result"]["totals"]["messages"], 0)
+            report = build_localgraph_status(
+                Workspace(root), home=Path(tmp) / "home",
+                launchctl=lambda _label: (113, "service not found"),
+            )["sources"]["facebook"]["accounts"][0]
+            findings = {finding["code"]: finding["severity"] for finding in report["findings"]}
+            self.assertEqual(findings["missing-export"], "warning")
+            self.assertNotIn("sync-failed", findings)
+            self.assertEqual(report["lifecycle"]["currentStage"], "preparing")
+            self.assertFalse(report["lifecycle"]["current"])
+            self.assertFalse(report["lifecycle"]["complete"])
+
+    def test_first_facebook_delivery_does_not_hide_drive_failures(self) -> None:
+        """Catch the pending-delivery exception hiding real authentication or API failures."""
+        from localgraph.drive import DriveAPIError
+        from localgraph.paths import Workspace
+        from localgraph.status import build_localgraph_status
+
+        for failure in ("access token revoked", "Drive API temporarily unavailable"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "graph"
+                configure_facebook_drive_fixture(root)
+                with mock.patch("localgraph.drive._list_drive_children", side_effect=DriveAPIError(failure)):
+                    code, stdout = run_cli(["--root", str(root), "facebook-sync", "--no-render"])
+                self.assertEqual(code, 0)
+                payload = json.loads(stdout)
+                account = payload["facebookAccounts"]["example-person"]
+                self.assertEqual(account["sync"]["status"], "degraded")
+                self.assertEqual(payload["facebookSync"]["status"], "degraded")
+                self.assertEqual(payload["facebookSync"]["accountsReady"], 0)
+                self.assertEqual(account["sync"]["lastError"], failure)
+                self.assertIsNone(account["sync"]["lastSuccessfulSyncAt"])
+                self.assertEqual(account["googleDrivePull"]["status"], "error")
+                report = build_localgraph_status(
+                    Workspace(root), home=Path(tmp) / "home",
+                    launchctl=lambda _label: (113, "service not found"),
+                )["sources"]["facebook"]["accounts"][0]
+                self.assertIn({"code": "sync-failed", "severity": "error"}, report["findings"])
+
+    def test_missing_facebook_exports_after_import_remain_degraded(self) -> None:
+        """Catch a previously populated account reverting to innocent first-delivery pending."""
+        for evidence in ("local-packet", "sync-receipt", "canonical-import"):
+            with self.subTest(evidence=evidence), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "graph"
+                configure_facebook_fixture(root, "example-person", "Example Person", "profile")
+                export = root / "sources/facebook-accounts/example-person/incoming/facebook-example-person-2026-08-29-export"
+                write_facebook_packet(export, owner="Example Person", content="previously imported message")
+                self.assertEqual(run_cli(["--root", str(root), "facebook-sync", "--no-render"])[0], 0)
+                receipt = root / "state/facebook-accounts/example-person/sync-status.json"
+                previous_success = json.loads(receipt.read_text())["lastSuccessfulSyncAt"]
+                configure_facebook_drive_fixture(root)
+                if evidence != "local-packet":
+                    export.rename(Path(tmp) / "offline-export")
+                if evidence != "sync-receipt":
+                    receipt.unlink()
+                if evidence != "canonical-import":
+                    (root / "state/localgraph.sqlite").rename(Path(tmp) / "offline.sqlite")
+
+                with mock.patch("localgraph.drive._list_drive_children", return_value=[]):
+                    code, stdout = run_cli(["--root", str(root), "facebook-sync", "--no-render"])
+
+                self.assertEqual(code, 0)
+                payload = json.loads(stdout)
+                account = payload["facebookAccounts"]["example-person"]
+                self.assertEqual(account["sync"]["status"], "degraded")
+                self.assertEqual(payload["facebookSync"]["status"], "degraded")
+                self.assertIsNotNone(account["sync"]["lastError"])
+                self.assertEqual(account["googleDrivePull"]["status"], "error")
+                if evidence == "sync-receipt":
+                    self.assertEqual(account["sync"]["lastSuccessfulSyncAt"], previous_success)
+                with contextlib.closing(sqlite3.connect(root / "state/localgraph.sqlite")) as db:
+                    self.assertEqual(
+                        db.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
+                        0 if evidence == "sync-receipt" else 1,
+                    )
+
 
 def run_cli(arguments: list[str]) -> tuple[int, str]:
     stream = io.StringIO()
@@ -499,7 +669,14 @@ def run_cli(arguments: list[str]) -> tuple[int, str]:
     return code, stream.getvalue()
 
 
-def configure_facebook_fixture(root: Path, key: str, display_name: str, account_type: str) -> None:
+def configure_facebook_fixture(
+    root: Path,
+    key: str,
+    display_name: str,
+    account_type: str,
+    *,
+    verify_page: bool = True,
+) -> None:
     code, _ = run_cli(
         [
             "--root",
@@ -517,6 +694,28 @@ def configure_facebook_fixture(root: Path, key: str, display_name: str, account_
     )
     if code != 0:
         raise AssertionError(f"failed to configure Facebook fixture: {key}")
+    if account_type == "page" and verify_page:
+        from localgraph.facebook_accounts import verify_facebook_export_capability
+        from localgraph.paths import Workspace
+
+        verify_facebook_export_capability(
+            Workspace(root),
+            account_key=key,
+            capability="supported",
+            provider_surface="facebook-page-settings",
+            observed_at="2026-08-29T22:00:00Z",
+        )
+
+
+def configure_facebook_drive_fixture(root: Path) -> None:
+    configure_facebook_fixture(root, "example-person", "Example Person", "profile")
+    path = root / "localgraph.config.json"
+    config = json.loads(path.read_text(encoding="utf-8"))
+    config["imports"]["facebook"]["accounts"]["example-person"]["googleDriveFolderId"] = "drive-root"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    (root / "state/google-drive-token.json").write_text(
+        json.dumps({"access_token": "synthetic-token", "expires_at": 4102444800}), encoding="utf-8",
+    )
 
 
 def write_facebook_packet(export_root: Path, *, owner: str, content: str) -> None:

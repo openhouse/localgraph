@@ -9,9 +9,73 @@ import unittest
 from pathlib import Path
 
 from localgraph.cli import main
+from localgraph.instagram import scan_instagram_source
 
 
 class IngestTests(unittest.TestCase):
+    def test_import_instagram_html_messages_from_meta_export(self) -> None:
+        """A delivered Meta HTML packet is importable, not misreported as empty."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "graph"
+            thread = (
+                root
+                / "sources"
+                / "instagram"
+                / "meta-html"
+                / "instagram-nycartc-2026-08-29-baseline"
+                / "your_instagram_activity"
+                / "messages"
+                / "inbox"
+                / "artist_123"
+            )
+            thread.mkdir(parents=True)
+            (thread / "message_1.html").write_text(
+                """<!doctype html>
+                <html><body>
+                <h1>Example Artist</h1>
+                <div class="_a6-g">
+                  <div><h2 class="_a6-h">Example Artist</h2></div>
+                  <div class="_a6-p"><div>HTML hello</div></div>
+                  <div class="_a6-o">Aug 29, 2026 3:45:00 PM</div>
+                </div>
+                <div class="_a6-g">
+                  <div><h2 class="_a6-h">NYC Artists' Coalition</h2></div>
+                  <div class="_a6-p"><div>HTML reply <a href="https://example.invalid/details">details</a></div></div>
+                  <div class="_a6-o">Aug 29, 2026 3:46 PM</div>
+                </div>
+                <div class="_a6-g"><h2 class="_a6-h">Example Artist</h2></div>
+                </body></html>""",
+                encoding="utf-8",
+            )
+
+            scan = scan_instagram_source(root / "sources" / "instagram")
+            self.assertEqual(scan["totalMessageFiles"], 1)
+            self.assertEqual(scan["messageFormats"], {"html": 1})
+
+            code, stdout = run_cli(
+                [
+                    "--root",
+                    str(root),
+                    "import",
+                    "--skip-imessage",
+                    "--me",
+                    "Jamie",
+                    "--me-instagram",
+                    "NYC Artists' Coalition",
+                ]
+            )
+
+            self.assertEqual(code, 0)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["totals"]["threads"], 1)
+            self.assertEqual(payload["totals"]["messages"], 2)
+            with contextlib.closing(sqlite3.connect(root / "state" / "localgraph.sqlite")) as db:
+                rows = db.execute(
+                    "SELECT sent_at, body_text FROM messages ORDER BY sent_at"
+                ).fetchall()
+            self.assertEqual(rows[0], ("2026-08-29T15:45:00Z", "HTML hello"))
+            self.assertEqual(rows[1], ("2026-08-29T15:46:00Z", "HTML reply details https://example.invalid/details"))
+
     def test_two_instagram_accounts_keep_identical_thread_paths_distinct(self) -> None:
         """An Instagram thread path is unique only within its exporting account."""
         with tempfile.TemporaryDirectory() as tmp:
