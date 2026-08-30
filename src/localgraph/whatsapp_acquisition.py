@@ -21,11 +21,11 @@ from pathlib import Path
 
 from .automation import instagram_sync_lock
 from .paths import Workspace
-from .whatsapp import _iso, _key, _load, _write, _time, chats, record_export, record_acquisition_failure, run_whatsapp_sync
+from .whatsapp import _iso, _key, _load, _write, _time, chats, record_export, record_acquisition_failure, run_whatsapp_sync, MAX_ARCHIVE_BYTES
 
 LABEL = "com.openhouse.localgraph.whatsapp-acquire"
 SESSION_FAILURES = {"session-unavailable", "identity-unverified", "app-disconnected", "filtered-inventory",
-                    "export-control-changed", "export-not-delivered", "invalid-native-driver-result"}
+                    "export-control-changed", "export-not-delivered", "invalid-native-driver-result", "insufficient-disk-space"}
 SAFE_FAILURES = SESSION_FAILURES | {"export-control-changed", "export-unavailable", "export-failed",
     "export-not-delivered", "ambiguous-download", "inventory-incomplete", "inventory-scroll-stalled",
     "inventory-changed-during-scan", "invalid-native-driver-result", "candidate-changed-during-run"}
@@ -39,6 +39,18 @@ def clean_title(value: str) -> str:
     return "".join(c for c in value if unicodedata.category(c) != "Cf").strip()
 
 
+def chat_observation(row) -> tuple[str, str]:
+    if isinstance(row, str):
+        title, kind = row, "unknown"
+    elif isinstance(row, dict):
+        title, kind = row.get("title"), row.get("kind")
+    else:
+        raise ValueError("invalid chat inventory")
+    if not isinstance(title, str) or not clean_title(title) or kind not in {"direct", "group", "unknown"}:
+        raise ValueError("invalid chat inventory")
+    return clean_title(title), kind
+
+
 def reconcile_inventory(workspace: Workspace, *, account: str, expected_profile: str,
                         observed_profile: str, lists: dict, date_order: str,
                         timezone_name: str) -> dict:
@@ -49,11 +61,18 @@ def reconcile_inventory(workspace: Workspace, *, account: str, expected_profile:
     ZoneInfo(timezone_name)
     if date_order not in {"mdy", "dmy"}:
         raise ValueError("explicit date convention required")
-    if any(not isinstance(rows, list) or any(not isinstance(t, str) or not clean_title(t)
-           for t in rows) for rows in lists.values()):
+    if any(not isinstance(rows, list) for rows in lists.values()):
         raise ValueError("invalid chat inventory")
     complete = set(lists) == {"main", "archived"}
-    counts = Counter(clean_title(t) for rows in lists.values() for t in rows)
+    observed_lists = {name: [chat_observation(row) for row in rows] for name, rows in lists.items()}
+    counts = Counter(row for rows in observed_lists.values() for row in rows)
+    title_counts = Counter(title for (title, kind), count in counts.items() for _ in range(count))
+    def matches(record, title, kind):
+        if clean_title(record["title"]) != title:
+            return False
+        prior_kind = record.get("kind", "unknown")
+        return (prior_kind == kind or kind == "unknown" or
+                (prior_kind == "unknown" and title_counts[title] == 1))
     now = _iso(datetime.now(timezone.utc))
     path = workspace.state_dir / "whatsapp-acquisition" / account / "inventory.json"
     with instagram_sync_lock(workspace) as acquired:
@@ -62,28 +81,39 @@ def reconcile_inventory(workspace: Workspace, *, account: str, expected_profile:
         workspace.ensure_workspace(force=False)
         config = _load(workspace.config_path)
         records = config.setdefault("imports", {}).setdefault("whatsapp", {}).setdefault("chats", {})
+        previous = _load(path)
+        seen_title_counts = Counter(previous.get("seenTitleCounts", {}))
+        previous_counts = Counter()
+        for entry in previous.get("entries", []):
+            previous_counts[entry["title"]] += entry["occurrences"]
+        seen_title_counts |= previous_counts | title_counts
         existing = [r for r in records.values() if r["accountKey"] == account]
         by_title = {}
         for r in existing:
             by_title.setdefault(clean_title(r["title"]), []).append(r)
         entries = []
-        for title, occurrences in counts.items():
-            bound = by_title.get(title, [])
-            state = "ambiguous" if occurrences > 1 or len(bound) > 1 else "configured"
+        for (title, kind), occurrences in counts.items():
+            bound = [r for r in by_title.get(title, []) if matches(r, title, kind)]
+            unknown_collision = title_counts[title] > 1 and (title, "unknown") in counts
+            unresolved_loss = seen_title_counts[title] > title_counts[title]
+            state = "ambiguous" if occurrences > 1 or len(bound) > 1 or unknown_collision or unresolved_loss else "configured"
             record = bound[0] if len(bound) == 1 else None
             if record and not record["enabled"]:
                 state = "excluded"
             if state == "configured" and record is None:
-                key = "chat-" + hashlib.sha256(title.encode()).hexdigest()[:24]
+                key = "chat-" + hashlib.sha256((title + "\0" + kind).encode()).hexdigest()[:24]
                 record = {"accountKey": account, "chatKey": key, "sourceKey": f"{account}:{key}",
-                          "title": title, "viewLabel": title, "kind": "unknown", "enabled": True,
+                          "title": title, "viewLabel": title, "kind": kind, "enabled": True,
                           "dateOrder": date_order, "timezone": timezone_name, "acquisitionIntervalHours": 24}
                 records[record["sourceKey"]] = record
-            entries.append({"title": title, "occurrences": occurrences, "state": state,
+            if record and record.get("kind") == "unknown" and kind != "unknown" and state == "configured":
+                record["kind"] = kind
+            entries.append({"title": title, "kind": kind, "occurrences": occurrences, "state": state,
                             "chatKey": record["chatKey"] if record else None,
-                            "list": next(k for k, v in lists.items() if title in [clean_title(t) for t in v])})
-        seen = set(counts)
-        missing = sum(clean_title(r["title"]) not in seen and r["enabled"] for r in existing)
+                            "list": next(k for k, v in observed_lists.items() if (title, kind) in v)})
+        missing = sum(r["enabled"] and not any(matches(r, title, kind) for title, kind in counts) for r in existing)
+        # An unresolved row still belongs to the observed population even before it has a binding.
+        missing = max(missing, sum((seen_title_counts - title_counts).values()))
         result = {"schemaVersion": 1, "accountKey": account, "observedAt": now,
                   "status": "inventoried" if complete else "inventory-incomplete",
                   "inventoryComplete": complete, "populationCovered": False, "historicalComplete": False,
@@ -92,7 +122,7 @@ def reconcile_inventory(workspace: Workspace, *, account: str, expected_profile:
                   "configuredChats": sum(e["state"] == "configured" for e in entries),
                   "ambiguousChats": sum(e["occurrences"] for e in entries if e["state"] == "ambiguous"),
                   "excludedChats": sum(e["occurrences"] for e in entries if e["state"] == "excluded"),
-                  "missingPreviouslySeenChats": missing, "entries": entries}
+                  "missingPreviouslySeenChats": missing, "seenTitleCounts": dict(seen_title_counts), "entries": entries}
         _write(workspace.config_path, config)
         _write(path, result)
     return result
@@ -127,21 +157,25 @@ def parse_driver_result(raw: str, operation: str) -> dict:
                                          or not isinstance(value.get("profile"), str)):
             raise ValueError
         if operation == "export" and (not isinstance(value.get("title"), str)
-                                      or not isinstance(value.get("mediaRequested"), bool)):
+                                      or not isinstance(value.get("mediaRequested"), bool)
+                                      or value.get("downloadObserved") is not True):
             raise ValueError
         return value
     except (ValueError, TypeError):
         raise ValueError("invalid-native-driver-result") from None
 
 
-def merge_pages(scan: dict) -> list[str]:
+def merge_pages(scan: dict) -> list:
     if not isinstance(scan, dict) or scan.get("topReached") is not True or scan.get("bottomReached") is not True or not scan.get("pages"):
         raise ValueError("inventory-incomplete")
     pages = scan["pages"]
     if not isinstance(pages, list):
         raise ValueError("inventory-incomplete")
-    if any(not isinstance(page, list) or any(not isinstance(t, str) or not t for t in page) for page in pages):
+    if any(not isinstance(page, list) for page in pages):
         raise ValueError("inventory-incomplete")
+    for page in pages:
+        for row in page:
+            chat_observation(row)
     merged = list(pages[0])
     for page in pages[1:]:
         if not page:
@@ -265,7 +299,7 @@ def population_status(workspace: Workspace, account: str, now: datetime | None =
         if entry["state"] != "configured":
             continue
         current += entry["chatKey"] in current_keys
-    result = {k: v for k, v in inventory.items() if k != "entries"}
+    result = {k: v for k, v in inventory.items() if k not in {"entries", "seenTitleCounts"}}
     fresh = bool(inventory.get("observedAt") and 0 <= (now - _time(inventory["observedAt"])).total_seconds() <= 48 * 3600)
     last_run = _load(workspace.state_dir / "whatsapp-acquisition" / account / "acquisition.json")
     inventory_failed = bool(last_run.get("error"))
@@ -322,10 +356,19 @@ def run_acquisition(workspace: Workspace, *, downloads: Path | None = None, driv
                 current_policy = _load(workspace.config_path).get("imports", {}).get("whatsapp", {}).get("acquisition", {})
                 if policy_hash(current_policy) != execution_policy:
                     raise ValueError("identity-unverified")
+                # Leave room for download, immutable custody, media staging and a reserve.
+                if any(shutil.disk_usage(p).free < 10 * 1024**3 + 3 * MAX_ARCHIVE_BYTES
+                       for p in (downloads, workspace.root)):
+                    raise ValueError("insufficient-disk-space")
                 before = download_snapshot(downloads)
-                response = driver("export", profile, entry["list"], entry["title"])
+                selection = [entry["list"], entry["title"]]
+                if entry.get("kind", "unknown") != "unknown":
+                    selection.append(entry["kind"])
+                response = driver("export", profile, *selection)
                 parse_driver_result(json.dumps(response), "export")
                 if clean_title(response["title"]) != entry["title"]:
+                    raise ValueError("identity-unverified")
+                if entry.get("kind", "unknown") != "unknown" and response.get("kind") != entry["kind"]:
                     raise ValueError("identity-unverified")
                 deadline, previous, stable = time.monotonic() + download_timeout, None, 0
                 while True:

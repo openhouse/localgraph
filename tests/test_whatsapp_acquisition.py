@@ -128,7 +128,7 @@ class WhatsAppAcquisitionTests(unittest.TestCase):
             counter += 1
             with zipfile.ZipFile(downloads / f"WhatsApp Chat - {title} ({counter}).zip", "w") as z:
                 z.writestr("_chat.txt", "[8/29/26, 10:00 AM] Synthetic: fixture\n")
-            return {"operation": operation, "status": "ok", "title": title, "mediaRequested": False}
+            return {"operation": operation, "status": "ok", "title": title, "mediaRequested": False, "downloadObserved": True}
         for _ in range(2):
             result = self.acq.run_acquisition(self.ws, downloads=downloads, driver=driver, poll_seconds=0.01)
             self.assertEqual(result["status"], "local-current")
@@ -155,7 +155,7 @@ class WhatsAppAcquisitionTests(unittest.TestCase):
                 raise ValueError("private contents must not be logged")
             with zipfile.ZipFile(downloads / "WhatsApp Chat - Good.zip", "w") as z:
                 z.writestr("_chat.txt", "[8/29/26, 10:00 AM] Synthetic: fixture\n")
-            return {"operation": "export", "status": "ok", "title": title, "mediaRequested": True}
+            return {"operation": "export", "status": "ok", "title": title, "mediaRequested": True, "downloadObserved": True}
         result = self.acq.run_acquisition(self.ws, downloads=downloads, driver=driver, poll_seconds=0.01)
         self.assertEqual(result["status"], "degraded")
         self.assertEqual(result["population"]["currentChats"], 1)
@@ -359,7 +359,7 @@ class WhatsAppAcquisitionTests(unittest.TestCase):
                            kind="group", date_order="mdy", timezone_name="UTC")
             with zipfile.ZipFile(downloads / "WhatsApp Chat - Original.zip", "w") as z:
                 z.writestr("_chat.txt", "[8/29/26, 10:00 AM] Synthetic: fixture\n")
-            return {"operation": operation, "status": "ok", "title": "Original", "mediaRequested": False}
+            return {"operation": operation, "status": "ok", "title": "Original", "mediaRequested": False, "downloadObserved": True}
         result = self.acq.run_acquisition(self.ws, downloads=downloads, driver=driver, poll_seconds=0.01)
         self.assertEqual(result["acceptedChatKeys"], [])
         self.assertFalse(list(self.ws.sources_dir.glob("whatsapp/*/*/archives/*.zip")))
@@ -418,6 +418,146 @@ class WhatsAppAcquisitionTests(unittest.TestCase):
         from localgraph.status import build_localgraph_status
         status = build_localgraph_status(self.ws, home=Path(self.tmp.name), launchctl=lambda _: (113, ""))
         self.assertFalse(status["sources"]["whatsapp"]["accounts"][0]["population"]["populationCovered"])
+
+    def test_low_disk_space_stops_before_requesting_an_export(self):
+        """Catch automatic exports consuming the last available local storage."""
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        self.acq.configure_acquisition(self.ws, account="self", expected_profile="Self",
+                                       date_order="mdy", timezone_name="UTC")
+        downloads = Path(self.tmp.name) / "downloads"
+        downloads.mkdir()
+        actions = []
+        def driver(operation, profile, *args):
+            if operation == "inventory":
+                return {"operation": operation, "status": "ok", "profile": profile,
+                        "lists": {"main": ["Friends"], "archived": []}}
+            actions.append(operation)
+            raise ValueError("unexpected export")
+        with patch.object(self.acq.shutil, "disk_usage", return_value=SimpleNamespace(free=1)):
+            result = self.acq.run_acquisition(self.ws, downloads=downloads, driver=driver)
+        self.assertEqual(actions, [])
+        self.assertEqual(result["error"], "insufficient-disk-space")
+        self.assertFalse(list(self.ws.sources_dir.glob("whatsapp/*/*/archives/*.zip")))
+
+    def test_export_protocol_requires_observed_native_completion(self):
+        """Catch treating an export click or media choice as completed native delivery."""
+        for observed in (None, False, "true", 1):
+            with self.subTest(observed=observed), self.assertRaises(ValueError):
+                self.acq.parse_driver_result(json.dumps({"operation": "export", "status": "ok",
+                    "title": "Friends", "mediaRequested": False, "downloadObserved": observed}), "export")
+
+    def test_chat_kind_disambiguates_a_contact_and_group_with_the_same_title(self):
+        """Catch conflating a known direct conversation with a same-named group."""
+        from localgraph.whatsapp import configure_chat, chats
+        configure_chat(self.ws, account_key="self", chat_key="existing", title="Same name",
+                       kind="direct", date_order="mdy", timezone_name="UTC")
+        try:
+            report = self.reconcile({"main": [{"title": "Same name", "kind": "direct"},
+                                              {"title": "Same name", "kind": "group"}], "archived": []})
+        except ValueError:
+            self.fail("verified native chat-kind evidence is not accepted")
+        self.assertEqual(report["configuredChats"], 2)
+        self.assertEqual(report["ambiguousChats"], 0)
+        direct, = [r for r in chats(self.ws) if r["kind"] == "direct"]
+        self.assertEqual(direct["chatKey"], "existing")
+        self.assertEqual(len({r["chatKey"] for r in chats(self.ws)}), 2)
+
+    def test_same_kind_or_unknown_kind_collisions_remain_ambiguous(self):
+        """Catch kind evidence being overextended to distinguish two groups or an unknown chat."""
+        for kinds in (("group", "group"), ("direct", "unknown")):
+            try:
+                report = self.reconcile({"main": [{"title": "Same", "kind": k} for k in kinds], "archived": []})
+            except ValueError:
+                self.fail("native chat-kind observations are not supported")
+            self.assertEqual(report["configuredChats"], 0)
+            self.assertEqual(report["ambiguousChats"], 2)
+
+    def test_disappeared_unresolved_chats_remain_in_the_population_ledger(self):
+        """Catch a duplicate shrinking to one row being promoted to a verified identity."""
+        self.reconcile({"main": ["Twins", "Twins", "Stable"], "archived": []})
+        for _ in range(2):
+            report = self.reconcile({"main": ["Twins", "Stable"], "archived": []})
+            self.assertEqual(report["missingPreviouslySeenChats"], 1)
+            self.assertEqual(report["configuredChats"], 1)
+            self.assertEqual(report["ambiguousChats"], 1)
+        report = self.reconcile({"main": ["Stable"], "archived": []})
+        self.assertEqual(report["missingPreviouslySeenChats"], 2)
+        public = self.acq.population_status(self.ws, "self", current_keys=set())
+        self.assertNotIn("Twins", json.dumps(public))
+        report = self.reconcile({"main": [{"title": "Twins", "kind": "direct"},
+                                          {"title": "Twins", "kind": "group"},
+                                          "Stable"], "archived": []})
+        self.assertEqual(report["missingPreviouslySeenChats"], 0)
+        self.assertEqual(report["configuredChats"], 3)
+
+    def test_paged_kind_evidence_preserves_overlap_without_conflating_chats(self):
+        """Catch paginated typed identities becoming strings or losing a same-title group."""
+        a = {"title": "Same", "kind": "direct"}
+        b = {"title": "Same", "kind": "group"}
+        c = {"title": "Other", "kind": "direct"}
+        try:
+            result = self.acq.merge_pages({"topReached": True, "bottomReached": True, "pages": [[a, b], [b, c]]})
+        except ValueError:
+            self.fail("typed native inventory pages are not supported")
+        self.assertEqual(result, [a, b, c])
+
+    @unittest.skipUnless(shutil.which("osacompile"), "native AppleScript requires macOS")
+    def test_native_confirmation_guard_uses_observed_alert_fields(self):
+        """Catch reading generic AX descriptions instead of the actual AppKit alert labels."""
+        import subprocess
+        compiled = Path(self.tmp.name) / "driver.scpt"
+        result = subprocess.run(["/usr/bin/osacompile", "-o", str(compiled),
+            str(Path(self.acq.__file__).with_name("whatsapp_native.applescript"))], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        probe = 'use scripting additions\nset driver to (load script (POSIX file ' + json.dumps(str(compiled)) + '))\n'
+        probe += '''return {driver's isExportConfirmation("‎Exported chat was saved to Downloads Folder", "‎OK", "action-button--999"), driver's isExportConfirmation("text", "button", "action-button--999"), driver's isExportConfirmation("Delete chat?", "OK", "action-button--999"), driver's isExportConfirmation("Exported chat was saved to Downloads Folder", "OK", "other-button")}'''
+        result = subprocess.run(["/usr/bin/osascript", "-e", probe], capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "true, false, false, false")
+
+    def test_typed_native_acquisition_keeps_same_named_conversations_separate(self):
+        """Catch losing the kind qualifier between inventory, native selection and cumulative import."""
+        self.acq.configure_acquisition(self.ws, account="self", expected_profile="Self",
+                                       date_order="mdy", timezone_name="UTC")
+        downloads = Path(self.tmp.name) / "downloads"
+        downloads.mkdir()
+        counter = 0
+        def driver(operation, profile, *args):
+            nonlocal counter
+            if operation == "inventory":
+                return {"operation": operation, "status": "ok", "profile": profile,
+                        "lists": {"main": [{"title": "Same", "kind": "direct"},
+                                            {"title": "Same", "kind": "group"}], "archived": []}}
+            list_name, title, kind = args
+            self.assertEqual((list_name, title), ("main", "Same"))
+            self.assertIn(kind, {"direct", "group"})
+            counter += 1
+            with zipfile.ZipFile(downloads / f"WhatsApp Chat - Same ({counter}).zip", "w") as z:
+                z.writestr("_chat.txt", f"[8/29/26, 10:00 AM] Synthetic: {kind} fixture\n")
+            return {"operation": operation, "status": "ok", "title": title, "kind": kind,
+                    "mediaRequested": False, "downloadObserved": True}
+        for _ in range(2):
+            result = self.acq.run_acquisition(self.ws, downloads=downloads, driver=driver, poll_seconds=0.01)
+            self.assertEqual(result["status"], "local-current")
+            self.assertEqual(len(result["acceptedChatKeys"]), 2)
+        from localgraph.whatsapp import run_whatsapp_sync
+        self.assertEqual([r["messages"] for r in run_whatsapp_sync(self.ws)["chats"]], [1, 1])
+
+    @unittest.skipUnless(shutil.which("osacompile"), "native AppleScript requires macOS")
+    def test_native_inventory_excludes_offscreen_cached_rows(self):
+        """Catch requesting menus on UIKit's cached cells outside the visible list viewport."""
+        import subprocess
+        compiled = Path(self.tmp.name) / "driver.scpt"
+        result = subprocess.run(["/usr/bin/osacompile", "-o", str(compiled),
+            str(Path(self.acq.__file__).with_name("whatsapp_native.applescript"))], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        probe = 'use scripting additions\nset driver to (load script (POSIX file ' + json.dumps(str(compiled)) + '))\n'
+        probe += '''set viewport to driver's chatViewport({100, -73}, {375, 1055}, {100, -73}, {375, 92})
+return {driver's isCenterVisible({100, -116}, {375, 69}, item 1 of viewport, item 2 of viewport), driver's isCenterVisible({100, -47}, {375, 69}, item 1 of viewport, item 2 of viewport), driver's isCenterVisible({100, 22}, {375, 69}, item 1 of viewport, item 2 of viewport), driver's isCenterVisible({100, 1000}, {375, 69}, item 1 of viewport, item 2 of viewport), driver's isCenterVisible({100, 0}, {0, 0}, item 1 of viewport, item 2 of viewport)}'''
+        result = subprocess.run(["/usr/bin/osascript", "-e", probe], capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "false, false, true, false, false")
 
 
 if __name__ == "__main__":
